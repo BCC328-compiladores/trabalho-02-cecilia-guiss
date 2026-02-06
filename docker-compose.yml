@@ -22,6 +22,15 @@ services:
     environment:
       - TERM=xterm-256color
 
+  latex:
+    image: texlive/texlive
+    container_name: sl-latex
+    volumes:
+      - ./relatorio:/data
+    working_dir: /data
+    # Keeps container alive to run commands via exec/run, or use it as a one-off command runner
+    command: tail -f /dev/null
+
 volumes:
   haskell-cabal-data:
   haskell-ghcup-data:

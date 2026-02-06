@@ -1,0 +1,14 @@
+// Exemplo 1: Cálculo de Fatorial
+func factorial(n : int) : int {
+    if (n <= 1) {
+        return 1;
+    } else {
+        return n * factorial(n - 1);
+    }
+}
+
+func main1() : int {
+    let result : int = factorial(5);
+    print(result);
+    return 0;
+}

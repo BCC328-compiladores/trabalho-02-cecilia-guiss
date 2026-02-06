@@ -18,31 +18,31 @@
 \definecolor{backcolour}{rgb}{0.95,0.95,0.92}
 
 \lstdefinestyle{mystyle}{
-    backgroundcolor=\color{backcolour},
-    commentstyle=\color{codegreen},
-    keywordstyle=\color{magenta},
-    numberstyle=\tiny\color{codegray},
-    stringstyle=\color{codepurple},
-    basicstyle=\ttfamily\footnotesize,
-    breakatwhitespace=false,
-    breaklines=true,
-    captionpos=b,
-    keepspaces=true,
-    numbers=left,
-    numbersep=5pt,
-    showspaces=false,
-    showstringspaces=false,
-    showtabs=false,
-    tabsize=2
+        backgroundcolor=\color{backcolour},
+        commentstyle=\color{codegreen},
+        keywordstyle=\color{magenta},
+        numberstyle=\tiny\color{codegray},
+        stringstyle=\color{codepurple},
+        basicstyle=\ttfamily\footnotesize,
+        breakatwhitespace=false,
+        breaklines=true,
+        captionpos=b,
+        keepspaces=true,
+        numbers=left,
+        numbersep=5pt,
+        showspaces=false,
+        showstringspaces=false,
+        showtabs=false,
+        tabsize=2
 }
 
 \lstset{style=mystyle}
 
-\title{Relatório de Projeto: Compilador SL}
+	\title{Relat\'{o}rio de Projeto: Compilador SL}
 \author{
-    Nome do Aluno \\
-    Matrícula: \\
-    BCC328 - Construção de Compiladores I - DECOM/UFOP
+        Cecilia Peret, Guilherme Silva \\
+        	{BCC328 - Constru\c{c}\~{a}o de Compiladores I} \\
+        DECOM/UFOP
 }
 \date{\today}
 
@@ -51,58 +51,286 @@
 \maketitle
 
 \begin{abstract}
+Este relat\'{o}rio descreve a implementa\c{c}\~{a}o do analisador l\'{e}xico e sint\'{a}tico do compilador para a linguagem educativa SL, desenvolvido como trabalho pr\'{a}tico da disciplina. O projeto inclui um lexer baseado em Megaparsec, um parser token-driven implementado com Megaparsec sobre uma sequ\^{e}ncia de tokens (token-stream Parsec), uma AST que agora inclui defini\c{c}\~{o}es de \texttt{struct} e fun\c{c}\~{o}es, e uma interface de linha de comando para testar o analisador.
 \end{abstract}
 
-\tableofcontents
+	
 
-\section{Introdução}
+\section{Introdu\c{c}\~{a}o}
+
+A linguagem SL \'{e} uma linguagem pequena usada para exerc\'{i}cios de compiladores. O objetivo deste trabalho foi implementar as fases iniciais do front-end de um compilador: an\'{a}lise l\'{e}xica e an\'{a}lise sint\'{a}tica, produzindo uma \'{A}rvore de Sintaxe Abstrata (AST) que pode ser usada em fases posteriores (an\'{a}lise sem\^{a}ntica, gera\c{c}\~{a}o de c\'{o}digo).
+
+O projeto foi desenvolvido em Haskell usando a biblioteca Megaparsec para o lexer e uma implementa\c{c}\~{a}o manual de parser que consome tokens produzidos pelo lexer.
 
 \section{Metodologia}
 
-\subsection{Estrutura sintática de SL}
+O desenvolvimento seguiu um ciclo iterativo: primeiro implementar o lexer, gerar tokens sobre arquivos de teste; em seguida implementar o parser por cima da lista de tokens. Para depura\c{c}\~{a}o, o projeto inclui uma interface CLI que permite imprimir tokens (modo \texttt{--lexer}) e tentar construir a AST (modo \texttt{--parser}).
 
-\subsection{Sistema de tipos para SL}
+Adicionalmente, foram implementados n\'{o}s m\'{o}dulos auxiliares para visualiza\c{c}\~{a}o no terminal:
+\begin{itemize}
+    \item \texttt{Pretty.hs}: Respons\'{a}vel pela formata\c{c}\~{a}o do c\'{o}digo (pretty printing), reconstruindo a s\'{i}ntaxe a partir da AST para exibi\c{c}\~{a}o leg\'{i}vel.
+    \item \texttt{ASTtoTree.hs}: Utiliza a biblioteca \texttt{Data.Tree} para gerar uma representa\c{c}\~{a}o hier\'{a}rquica (floresta) da AST, facilitando a verifica\c{c}\~{a}o da estrutura sint\'{a}tica analisada via terminal.
+\end{itemize}
 
-\subsection{Inferência de tipos para SL}
+As decis\~{o}es principais foram:
+\begin{itemize}
+    \item \textbf{Escolha do Megaparsec:} Optou-se pelo uso do Megaparsec em detrimento de ferramentas tradicionais como Alex e Happy. O Megaparsec permite escrever analisadores l\'{e}xicos e sint\'{a}ticos de forma unificada e mais idiom\'{a}tica em Haskell (combinadores mon\'{a}dicos), oferecendo melhor integra\c{c}\~{a}o com a linguagem e mensagens de erro superiores, sem a necessidade de geradores de c\'{o}digo externos.
+    \item usar Megaparsec tanto no lexer quanto no parser: o lexer usa Megaparsec para tokenizar e preservar \texttt{SourcePos} em cada token, e o parser agora opera sobre um token-stream (\texttt{Parsec} sobre \texttt{[SLToken]}) usando primitivas de Megaparsec para corresponder tokens;
+    \item manter a AST simples e evoluir conforme os testes --- a AST foi expandida para incluir \texttt{Definition} e \texttt{Struct}, al\'{e}m de suporte a literais de struct, arrays, \texttt{new}, chamadas e la\c{c}os.
+\end{itemize}
 
-\subsection{Semântica operacional para SL}
+\section{Linguagem: estrutura sint\'{a}tica de SL}
 
+O analisador implementado cobre um subconjunto expressivo da linguagem SL, com as seguintes constru\c{c}\~{o}es (exemplos):
+\begin{itemize}
+    \item literais: inteiros, floats, strings, booleanos;
+    \item identificadores e chamadas de fun\c{c}\~{a}o: \texttt{f(x, y)};
+    \item arrays e literais de arrays: \texttt{a[i]}, \texttt{[1,2,3]};
+    \item express\~{a}o \texttt{new T[e]} para cria\c{c}\~{a}o de arrays;
+    \item declara\c{c}\~{o}es \texttt{let}, instru\c{c}\~{o}es \texttt{return}, \texttt{if/else}, \texttt{while}, \texttt{for};
+    \item defini\c{c}\~{a}o de fun\c{c}\~{a}o: \texttt{func name(params) : retType \{ ... \}};
+    \item suporte b\'{a}sico a tipos primitivos (\texttt{int}, \texttt{float}, \texttt{string}, \texttt{bool}) e tipos de usu\'{a}rio (identificadores como nomes de tipo) com sufixos de array (\texttt{T[]}, \texttt{T[n]}).
+\end{itemize}
 
-\section{Arquitetura do Compilador}
+\section{Gram\'{a}tica Formal}
 
-\subsection{Análise léxica}
+A gram\'{a}tica implementada, descrita em nota\c{c}\~{a}o de Gramática Livre de Contexto (GLC), \'{e} apresentada abaixo.
 
-\subsection{Análise sintática}
+\begin{lstlisting}[basicstyle=\ttfamily\scriptsize]
+Program -> TopLevels
 
-\subsection{Árvore de sintaxe abstrata}
+TopLevels -> TopLevel TopLevels
+           | lambda
 
-\subsection{Análise semântica}
+TopLevel -> StructDef
+          | FuncDef
 
-\subsection{Geração de código}
+StructDef -> struct id { StructFields }
 
-\section{Resultados e Discussão}
+StructFields -> StructField StructFields
+              | lambda
 
-\subsection{Instruções de Uso}
+StructField -> id : Type ;
 
+FuncDef -> GenericsOpt func id ( ParamsOpt ) TypeRetOpt { Stmts }
 
-\subsection{Testes Realizados}
+GenericsOpt -> forall id GenIds .
+             | lambda
 
+GenIds -> id GenIds
+        | lambda
 
-\subsection{Limitações}
+ParamsOpt -> Params
+           | lambda
 
-\section{Conclusão}
+Params -> Param ParamsTail
 
-\section{Referências}
+ParamsTail -> , Param ParamsTail
+            | lambda
 
-\begin{thebibliography}{9}
-\bibitem{hutton2016}
-Hutton, G. (2016). \emph{Programming in Haskell}. Cambridge University Press.
+Param -> id TypeOpt
 
-\bibitem{appel1998}
-Appel, A. W. (1998). \emph{Modern Compiler Implementation in ML}. Cambridge University Press.
+TypeRetOpt -> : Type
+            | lambda
 
-\bibitem{webassembly2023}
-WebAssembly Community Group. (2023). \emph{WebAssembly Specification}.
-\end{thebibliography}
+TypeOpt -> : Type
+         | lambda
+
+Type -> BaseType ArraySuffixes
+
+ArraySuffixes -> ArraySuffix ArraySuffixes
+               | lambda
+
+ArraySuffix -> []
+             | [ int_lit ]
+
+BaseType -> FuncType
+          | PrimitiveType
+          | id
+
+PrimitiveType -> int | float | string | bool | void
+
+FuncType -> ( TypeListOpt ) ArrowOpt
+
+TypeListOpt -> Type TypeListTail
+             | lambda
+
+TypeListTail -> , Type TypeListTail
+              | lambda
+
+ArrowOpt -> -> Type
+          | lambda
+
+Stmts -> Stmt Stmts
+       | lambda
+
+Stmt -> return Expr ;
+      | let id TypeOpt InitOpt ;
+      | if ( Expr ) { Stmts } ElseOpt
+      | while ( Expr ) { Stmts }
+      | for ( ForInitOpt ; Expr ; ExprOpt ) { Stmts }
+      | Expr ;
+
+InitOpt -> = Expr
+         | lambda
+
+ElseOpt -> else { Stmts }
+         | lambda
+
+ForInitOpt -> ForInit
+            | lambda
+
+ForInit -> let id TypeOpt InitOpt
+         | Expr
+
+ExprOpt -> Expr
+         | lambda
+
+Expr -> PrefixExpr ExprTail
+
+ExprTail -> BinOp PrefixExpr ExprTail
+          | lambda
+
+PrefixExpr -> ++ PrefixExpr
+            | -- PrefixExpr
+            | ! PrefixExpr
+            | Term
+
+Term -> int_lit
+      | float_lit
+      | string_lit
+      | new BaseType [ Expr ]
+      | [ ExprListOpt ]
+      | ( Expr )
+      | id
+      | Term Postfix
+
+ExprListOpt -> Expr ExprListTail
+             | lambda
+
+ExprListTail -> , Expr ExprListTail
+              | lambda
+
+Postfix -> [ Expr ]
+         | . id
+         | ( ExprListOpt )
+         | ++
+         | --
+
+BinOp -> + | - | * | / | < | > | <= | >= | == | != | && | || | =
+\end{lstlisting}
+
+\section{Sistema de tokens e an\'{a}lise l\'{e}xica}
+
+O lexer est\'{a} em \texttt{workspace/src/Lexer.hs}. Ele usa Megaparsec e produz tokens definidos em \texttt{workspace/src/SLToken.hs}. Cada token carrega a posi\c{c}\~{a}o de origem (\texttt{SourcePos}), o que facilita mensagens de erro informativas.
+
+Principais pontos do lexer:
+\begin{itemize}
+    \item reconhece palavras reservadas: \texttt{func}, \texttt{let}, \texttt{return}, \texttt{if}, \texttt{else}, \texttt{while}, \texttt{for}, \texttt{struct}, \texttt{new}, \texttt{forall}, \texttt{void} e tipos primitivos;
+    \item reconhece operadores compostos (por exemplo, \texttt{++}, \texttt{->}, \texttt{==}, \texttt{!=}, \texttt{\&\&}, \texttt{||});
+    \item produz tokens para pontua\c{c}\~{a}o: par\^{e}nteses, colchetes, chaves, dois-pontos, ponto, v\'{i}rgula e ponto-e-v\'{i}rgula;
+    \item preserva coment\'{a}rios (s\~{a}o ignorados) e posicionamento no arquivo para cada token.
+\end{itemize}
+
+Arquivo relevante: \texttt{workspace/src/SLToken.hs} cont\'{e}m a enumera\c{c}\~{a}o \texttt{SLToken} com todos os construtores usados pelo parser.
+
+Detalhes da implementa\c{c}\~{a}o do lexer
+\begin{itemize}
+    \item A fun\c{c}\~{a}o principal \'{e} \texttt{lexTokens :: String -> String -> Either (ParseErrorBundle String Void) [SLToken]} definida em \texttt{workspace/src/Lexer.hs}. Ela recebe o conte\'{u}do do arquivo e o nome do arquivo e retorna a lista de tokens ou um \texttt{ParseErrorBundle} do Megaparsec.
+    \item O scanner de espa\c{c}os e coment\'{a}rios usa o combinador \texttt{L.space} com \texttt{space1}, \texttt{L.skipLineComment "//"} e \texttt{L.skipBlockComment "/*" "*/"} para ignorar espa\c{c}os e coment\'{a}rios antes de cada token (fun\c{c}\~{a}o \texttt{sc}).
+    \item A ordem de escolha dos tokens em \texttt{pToken} \'{e} importante: primeiro palavras-chave, depois booleanos, n\'{u}meros (float antes de int), strings, s\'{i}mbolos, operadores e finalmente identificadores --- isso evita conflitos (por exemplo, a palavra-chave "func" n\~{a}o \'{e} reconhecida como identificador).
+    \item Para cada token existe um parser dedicado: \texttt{pKeyword}, \texttt{pBool}, \texttt{pNumber} (com \texttt{pFloat} e \texttt{pInt}), \texttt{pString}, \texttt{pSymbol}, \texttt{pOperator} e \texttt{pIdent}. Cada parser captura a posi\c{c}\~{a}o atual com \texttt{getSourcePos} e constr\'{o}i o \texttt{SLToken} correspondente (por exemplo \texttt{TkIntLit n pos}).
+    \item O parser de operadores reconhece sequ\^{e}ncias compostas (por exemplo \texttt{"->"}, \texttt{"\&\&"}, \texttt{"||"}, \texttt{"<="}, \texttt{"=="}, \texttt{"++"}, \texttt{"--"}) antes de operadores simples, para garantir que o token mais longo seja escolhido.
+\end{itemize}
+
+\section{An\'{a}lise sint\'{a}tica (parser)}
+
+O parser principal est\'{a} em \texttt{workspace/src/Parser.hs}. Em vez de construir um parser combinat\'{o}rio sobre o texto, optou-se por um parser "token-driven": o lexer produz \texttt{[SLToken]} e o parser consome essa lista com uma m\'{a}quina simples.
+
+Arquitetura do parser:
+\begin{itemize}
+    \item tipo de parser: o parser agora \'{e} um \texttt{Parsec} que consome um stream de \texttt{[SLToken]} (ou seja, \texttt{type Parser = Parsec Void [SLToken]}). Em vez de manipular o estado de tokens manualmente, usamos as primitivas de Megaparsec para token streams com fun\c{c}\~{o}es auxiliares;
+    \item utilit\'{a}rios: \texttt{matchTok} (extrai valores de tokens via um \texttt{SLToken -> Maybe a}) e \texttt{satisfyTok} (testa predicados \texttt{SLToken -> Bool}) encapsulam a chamada a \texttt{token} do Megaparsec e simplificam o reconhecimento de palavras-chave, s\'{i}mbolos e literais;
+    \item itens de topo: o parser aceita tanto defini\c{c}\~{o}es de \texttt{struct} quanto de \texttt{func} (representadas no c\'{o}digo como \texttt{Definition} com constructors \texttt{DefStruct} e \texttt{DefFunc}); structs s\~{a}o consumidos e armazenados na AST (n\~{a}o mais descartados);
+    \item express\~{o}es: implementado usando \texttt{makeExprParser} (tabela de operadores) para preced\^{e}ncia, com \texttt{pPostfix} para indexa\c{c}\~{a}o, acesso a campo, chamadas e literais de struct no formato \texttt{Ident\{...\}}; postfix ++/-- tamb\'{e}m s\~{a}o suportados;
+    \item instru\c{c}\~{o}es: \texttt{let} (com inicializador e tipo opcionais), \texttt{return}, \texttt{if/else}, \texttt{while} e \texttt{for} (com inicializador, condi\c{c}\~{a}o e incremento analisados);
+    \item tipos: \texttt{pType} aceita tipos primitivos, identificadores de tipo e sufixos de array como \texttt{[]}/\texttt{[n]}, al\'{e}m de uma forma simples de tipo fun\c{c}\~{a}o \texttt{(a) -> b} representada como string.
+\end{itemize}
+
+O parser produz uma AST definida em \texttt{Parser.hs} com os construtores principais:
+\begin{itemize}
+    \item \texttt{Definition}: \texttt{DefFunc Func} ou \texttt{DefStruct Struct} --- o topo do arquivo pode conter ambas defini\c{c}\~{o}es;
+    \item \texttt{Struct}: nome e lista de campos (pares nome/tipo);
+    \item \texttt{Expr}: \texttt{EInt}, \texttt{EFloat}, \texttt{EString}, \texttt{EVar}, \texttt{ECall} (usado tamb\'{e}m para literais de struct no formato atual), \texttt{EArray}, \texttt{ENew}, \texttt{EBin}, \texttt{EPost};
+    \item \texttt{Stmt}: \texttt{SReturn}, \texttt{SLet}, \texttt{SIf}, \texttt{SWhile}, \texttt{SFor}, \texttt{SExpr}.
+\end{itemize}
+
+\section{\'{A}rvore de sintaxe abstrata}
+
+A AST \'{e} mantida simples e orientada \`{a}s necessidades imediatas do parser. Ela \'{e} suficiente para representar programas de teste e permite futuras fases de checagem de tipos e gera\c{c}\~{a}o de c\'{o}digo.
+
+Exemplo de n\'{o}: uma atribui\c{c}\~{a}o via \'{i}ndice, como \texttt{result[i] = f(v[i]);}, \'{e} representada usando n\'{o}s de indexa\c{c}\~{a}o (no parser implementado como um \texttt{EBin "[]"}) e atribui\c{c}\~{a}o como um \texttt{EBin "="} com o lado esquerdo e direito apropriados.
+
+\section{An\'{a}lise sem\^{a}ntica e gera\c{c}\~{a}o de c\'{o}digo}
+
+Estas fases n\~{a}o foram implementadas integralmente no escopo atual. O projeto fornece a base (tokens + AST) necess\'{a}ria para implementar:
+\begin{itemize}
+    \item checagem est\'{a}tica de tipos e infer\^{e}ncia;
+    \item resolu\c{c}\~{a}o de nomes e verifica\c{c}\~{a}o de escopo;
+    \item gera\c{c}\~{a}o de c\'{o}digo intermedi\'{a}rio (por exemplo, uma IR simples) ou tradu\c{c}\~{a}o para C/WebAssembly.
+\end{itemize}
+
+\section{Modo de uso}
+
+O projeto inclui um execut\'{a}vel chamado \texttt{sl} que pode ser executado via Cabal no diret\'{o}rio \texttt{workspace}. Exemplos de uso:
+
+\begin{lstlisting}
+cd workspace
+make build        # executa 'cabal build' via Makefile
+make lexer        # roda o lexer sobre os arquivos em TESTS (ou passe arquivos como argumentos)
+make parser       # roda o parser sobre os arquivos em TESTS
+make pretty       # executa a saida 'pretty' (formatacao) sobre os arquivos em TESTS
+make test         # executa lexer, parser e pretty em sequencia
+
+# Exemplos de uso com arquivos especificos:
+# make lexer TESTS=test/ex6.sl
+# make parser TESTS=test/ex6.sl
+\end{lstlisting}
+
+O reposit\'{o}rio tamb\'{e}m inclui um \texttt{docker-compose} para facilitar execu\c{c}\~{a}o em um container conforme instru\c{c}\~{o}es no \texttt{README.md} do projeto.
+
+\section{Testes realizados}
+
+Foram utilizados arquivos de exemplo (por exemplo \texttt{test/ex2.sl}, \texttt{test/ex3.sl}, \texttt{test/ex6.sl}) para validar o lexer e o parser. Durante o desenvolvimento foram corrigidos problemas como:
+\begin{itemize}
+    \item tokens com posi\c{c}\~{a}o (SourcePos) que exigiram padr\~{o}es de correspond\^{e}ncia com campos extras;
+    \item parsing de acesso a campos (ponto) e indexa\c{c}\~{a}o dentro de express\~{o}es de tamanho (por exemplo, \texttt{new b[v.size]});
+    \item suporte a declara\c{c}\~{o}es de \texttt{struct} de topo e literais de struct no formato \texttt{Type\{v1, v2, ...\}} (por exemplo, \texttt{Person{"Alice", 25, 1.65}});
+    \item aceita\c{c}\~{a}o de tipos de par\^{a}metro opcionais e inicializadores opcionais em \texttt{let};
+    \item suporte a literais de array e \`{a} express\~{a}o \texttt{new T[e]}.
+    \item Foram criados 6 arquivos de teste cobrindo diversas constru\c{c}\~{o}es da linguagem SL. Todos est\~{a}o localizados na pasta test
+\end{itemize}
+
+\section{Limita\c{c}\~{o}es e trabalho futuro}
+
+Limita\c{c}\~{o}es atuais:
+\begin{itemize}
+    \item an\'{a}lise sem\^{a}ntica e sistema de tipos ainda n\~{a}o implementados;
+    \item gera\c{c}\~{a}o de c\'{o}digo ausente;
+    \item representa\c{c}\~{a}o de tipos na AST \'{e} simplificada (strings) e deve ser substitu\'{i}da por um AST de tipos dedicado;
+    \item mensagens de erro do parser atualmente s\~{a}o retornadas como \texttt{String} (via \texttt{show} do \texttt{ParseErrorBundle}) --- podem ser melhor formatadas para uso interativo;
+    \item o parser \'{e} manual e poderia ser refatorado para reduzir duplica\c{c}\~{a}o (por exemplo, usar combinadores mais declarativos ou um parser de preced\^{e}ncia completo).
+\end{itemize}
+
+\section{Conclus\~{a}o}
+
+O trabalho entregou um front-end inicial funcional para a linguagem SL: um lexer robusto baseado em Megaparsec e um parser token-driven que j\'{a} entende um conjunto razo\'{a}vel de constru\c{c}\~{o}es de linguagem. O artefato fornece uma base s\'{o}lida para as pr\'{o}ximas fases, como checagem de tipos e gera\c{c}\~{a}o de c\'{o}digo.
+Apesar das limita\c{c}\~{o}es, o projeto demonstra conceitos fundamentais de an\'{a}lise l\'{e}xica e sint\'{a}tica em compiladores, servindo como um ponto de partida para futuras extens\~{o}es.
+
+\section{Refer\^{e}ncias}
+
+\begin{itemize}
+    \item Megaparsec: Monadic parser combinators. Dispon\'{i}vel em: \url{https://hackage.haskell.org/package/megaparsec}. Acesso em: 14 dez. 2025.
+\end{itemize}
 
 \end{document}

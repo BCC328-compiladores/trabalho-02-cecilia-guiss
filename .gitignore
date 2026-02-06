@@ -130,3 +130,9 @@ build/
 .bak
 .mtc
 build/
+
+# RELATÓRIO
+relatorio/relatorio.aux
+relatorio/relatorio.log
+relatorio/relatorio.out
+
