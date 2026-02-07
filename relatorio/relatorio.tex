@@ -311,16 +311,52 @@ Foram utilizados arquivos de exemplo (por exemplo \texttt{test/ex2.sl}, \texttt{
     \item Foram criados 6 arquivos de teste cobrindo diversas constru\c{c}\~{o}es da linguagem SL. Todos est\~{a}o localizados na pasta test
 \end{itemize}
 
+\section{An\'{a}lise Sem\^{a}ntica (Etapa 2)}
+
+A segunda etapa do trabalho focou na implementa\c{c}\~{a}o da an\'{a}lise sem\^{a}ntica e verifica\c{c}\~{a}o de tipos.
+O m\'{o}dulo \texttt{TypeChecker.hs} foi criado para realizar as seguintes valida\c{c}\~{o}es:
+
+\begin{itemize}
+    \item \textbf{Verifica\c{c}\~{a}o de Tipos:} Suporte a tipos primitivos (\texttt{int, float, bool, string, void}) e tipos definidos pelo usu\'{a}rio (structs e arrays).
+    \item \textbf{Verifica\c{c}\~{a}o de Escopo:} Valida\c{c}\~{a}o da declara\c{c}\~{a}o de vari\'{a}veis e fun\c{c}\~{o}es antes do uso. O ambiente de tipos (\texttt{Env}) mant\'{e}m o rastreamento de s\'{i}mbolos globais (fun\c{c}\~{o}es, structs) e locais (vari\'{a}veis).
+    \item \textbf{Compatibilidade de Operadores:} Valida\c{c}\~{a}o de operandos em opera\c{c}\~{o}es bin\'{a}rias (aritm\'{e}ticas, l\'{o}gicas, relacionais).
+    \item \textbf{Acesso a Campos e Arrays:} Verifica\c{c}\~{a}o de acesso a campos de structs e indexa\c{c}\~{a}o de arrays com tipos corretos.
+    \item \textbf{Tipos de Fun\c{c}\~{a}o e Retorno:} Verifica\c{c}\~{a}o de assinaturas de fun\c{c}\~{o}es e correspond\^{e}ncia de tipos de retorno e argumentos.
+    \item \textbf{Suporte a Polimorfismo (b\'{a}sico):} Implementa\c{c}\~{a}o inicial de checagem para fun\c{c}\~{o}es gen\'{e}ricas e fun\c{c}\~{o}es de ordem superior (HOF), permitindo construtos como \texttt{map}.
+    \item \textbf{Fun\c{c}\~{o}es Embutidas:} Suporte a \texttt{print} polim\'{o}rfico (aceita int, float, string).
+\end{itemize}
+
+O verificador de tipos percorre a AST gerada pelo parser e reporta erros sem\^{a}nticos detalhados ou sucesso.
+
 \section{Limita\c{c}\~{o}es e trabalho futuro}
 
 Limita\c{c}\~{o}es atuais:
 \begin{itemize}
-    \item an\'{a}lise sem\^{a}ntica e sistema de tipos ainda n\~{a}o implementados;
-    \item gera\c{c}\~{a}o de c\'{o}digo ausente;
+    \item gera\c{c}\~{a}o de c\'{o}digo em desenvolvimento (Etapa 3);
     \item representa\c{c}\~{a}o de tipos na AST \'{e} simplificada (strings) e deve ser substitu\'{i}da por um AST de tipos dedicado;
     \item mensagens de erro do parser atualmente s\~{a}o retornadas como \texttt{String} (via \texttt{show} do \texttt{ParseErrorBundle}) --- podem ser melhor formatadas para uso interativo;
     \item o parser \'{e} manual e poderia ser refatorado para reduzir duplica\c{c}\~{a}o (por exemplo, usar combinadores mais declarativos ou um parser de preced\^{e}ncia completo).
 \end{itemize}
+
+\section{Gera\c{c}\~{a}o de C\'{o}digo (Etapa 3)}
+
+A terceira etapa implementou a gera\c{c}\~{a}o de c\'{o}digo para WebAssembly (WAT).
+Novos m\'{o}dulos:
+\begin{itemize}
+    \item \texttt{WAT.hs}: Define a AST do WebAssembly (WModule, WFunc, WInstr) e o Pretty Printer respons\'{a}vel por gerar o c\'{o}digo S-Expression final.
+    \item \texttt{CodeGenerator.hs}: Percorre a AST da linguagem SL e traduz para instru\c{c}\~{o}es WAT.
+\end{itemize}
+
+Funcionalidades implementadas:
+\begin{itemize}
+    \item \textbf{Mapeamento de Tipos:} \texttt{int/bool} $\to$ \texttt{i32}, \texttt{float} $\to$ \texttt{f64}.
+    \item \textbf{Express\~{o}es B\'{a}sicas:} Aritm\'{e}tica, compara\c{c}\~{o}es e chamadas de fun\c{c}\~{a}o.
+    \item \textbf{Controle de Fluxo:} Tradução de \texttt{if}, \texttt{while}, \texttt{for} para constru\c{c}\~{o}es estruturadas do WASM (\texttt{block}, \texttt{loop}, \texttt{br\_if}).
+    \item \textbf{Fun\c{c}\~{o}es:} Suporte a fun\c{c}\~{o}es, vari\'{a}veis locais e recurs\~{a}o.
+    \item \textbf{Aloca\c{c}\~{a}o de Mem\'{o}ria (Arrays):} Implementa\c{c}\~{a}o de um alocador linear simples (bump allocator) usando var\'{i}avel global \texttt{\$free\_ptr}. Suporte a \texttt{new T[n]}, literais de array e acesso por \'{i}ndice.
+\end{itemize}
+
+O compilador gera c\'{o}digo WAT v\'{a}lido que pode ser convertido para bin\'{a}rio \texttt{.wasm} utilizando ferramentas como \texttt{wat2wasm}.
 
 \section{Conclus\~{a}o}
 

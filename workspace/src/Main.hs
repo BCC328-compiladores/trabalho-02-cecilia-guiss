@@ -7,6 +7,7 @@ import Lexer (lexTokens)
 import SLToken (SLToken)
 import Parser (parseSL)
 import Data.Tree (drawTree)
+import TypeChecker (checkProgram)
 
 import ASTtoTree
 
@@ -23,44 +24,44 @@ main = do
     args <- getArgs
     case args of
         ["--lexer", filename] -> do
-            handle <- openFile filename ReadMode
-            hSetEncoding handle utf8
-            content <- hGetContents handle
+            content <- readFileUTF8 filename
             case lexTokens content filename of
-                Left err -> do
-                    hPutStrLn stderr ("Lexer error:\n" ++ errorBundlePretty err)
-                    exitFailure
+                Left err -> hPutStrLn stderr (errorBundlePretty err) >> exitFailure
                 Right tokens -> mapM_ showToken tokens
 
         ["--parser", filename] -> do
-            handle <- openFile filename ReadMode
-            hSetEncoding handle utf8
-            content <- hGetContents handle
+            content <- readFileUTF8 filename
             case lexTokens content filename of
-                Left err -> do
-                    hPutStrLn stderr ("Lexer error:\n" ++ errorBundlePretty err)
-                    exitFailure
+                Left err -> hPutStrLn stderr (errorBundlePretty err) >> exitFailure
                 Right tokens -> case parseSL tokens of
-                    Left perr -> do
-                        hPutStrLn stderr ("Parser error:\n" ++ perr)
-                        exitFailure
+                    Left perr -> hPutStrLn stderr perr >> exitFailure
                     Right ast -> putStrLn (drawTree (defsToTree ast))
 
         ["--pretty", filename] -> do
-            handle <- openFile filename ReadMode
-            hSetEncoding handle utf8
-            content <- hGetContents handle
+            content <- readFileUTF8 filename
             case lexTokens content filename of
-                Left err -> do
-                    hPutStrLn stderr ("Lexer error:\n" ++ errorBundlePretty err)
-                    exitFailure
+                Left err -> hPutStrLn stderr (errorBundlePretty err) >> exitFailure
                 Right tokens -> case parseSL tokens of
-                    Left perr -> do
-                        hPutStrLn stderr ("Parser error:\n" ++ perr)
-                        exitFailure
+                    Left perr -> hPutStrLn stderr perr >> exitFailure
                     Right ast -> putDoc (vsep (map prettyDefinition ast) <> hardline)
 
-        _ -> putStrLn "Usage: sl [--lexer|--parser|--pretty] <file>"
+        ["--typecheck", filename] -> do
+            content <- readFileUTF8 filename
+            case lexTokens content filename of
+                Left err -> hPutStrLn stderr (errorBundlePretty err) >> exitFailure
+                Right tokens -> case parseSL tokens of
+                    Left perr -> hPutStrLn stderr perr >> exitFailure
+                    Right ast -> case checkProgram ast of
+                        Left terr -> hPutStrLn stderr ("Type Error: " ++ terr) >> exitFailure
+                        Right () -> putStrLn "OK"
+
+        _ -> putStrLn "Usage: sl [--lexer|--parser|--pretty|--typecheck] <file>"
+
+readFileUTF8 :: FilePath -> IO String
+readFileUTF8 f = do
+    h <- openFile f ReadMode
+    hSetEncoding h utf8
+    hGetContents h
 
 showToken :: SLToken -> IO ()
 showToken tok = putDoc (prettyToken tok <> hardline)
