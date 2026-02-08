@@ -9,7 +9,7 @@ func reverse(arr : int[], size : int) : int [] {
     return result;
 }
 
-func main3() : void {
+func main() : void {
     let original : int[5] = [1, 2, 3, 4, 5];
     let reversed : int[] = reverse(original, 5);
     let j : int = 0;

@@ -10,11 +10,13 @@ import Parser
 
 -- Ambiente do Verificador de Tipos
 data Env = Env
-    { vars    :: Map String Type                 -- Variáveis locais e parâmetros
-    , funcs   :: Map String ([Type], Type)       -- Definições de funções globais
-    , structs :: Map String (Map String Type)    -- Layouts de Estruturas
-    , context :: [Map String Type]               -- Pilha de escopos
-    , retType :: Maybe Type                      -- Tipo de retorno esperado (da função atual)
+    { vars    :: Map String Type                 -- Todas as variáveis visíveis (incluindo escopos pais)
+    , currentVars :: Map String Type             -- Variáveis declaradas APENAS no escopo atual
+    , funcs   :: Map String ([String], [Type], Type)  -- (Genéricos, Argumentos, Retorno)
+    , structs :: Map String (Map String Type)    
+    , context :: [(Map String Type, Map String Type)] -- Pilha de (vars, currentVars)
+    , retType :: Maybe Type                      
+    , activeGens :: [String]                     -- Genéricos da função atual
     }
 
 type CheckM a = ExceptT String (State Env) a
@@ -23,7 +25,7 @@ runCheck :: CheckM a -> Either String a
 runCheck ma = evalState (runExceptT ma) emptyEnv
 
 emptyEnv :: Env
-emptyEnv = Env Map.empty Map.empty Map.empty [] Nothing
+emptyEnv = Env Map.empty Map.empty Map.empty Map.empty [] Nothing []
 
 -- Verifica se uma variável está no escopo atual
 isVarInScope :: String -> CheckM Bool
@@ -34,26 +36,35 @@ isVarInScope name = do
 enterScope :: CheckM ()
 enterScope = do
     st <- get
-    put $ st { context = vars st : context st } 
+    put $ st { context = (vars st, currentVars st) : context st
+             , currentVars = Map.empty 
+             } 
 
 exitScope :: CheckM ()
 exitScope = do
     st <- get
     case context st of
         [] -> throwError "Erro interno: Esvaziamento de escopo"
-        (oldVars:rest) -> put $ st { vars = oldVars, context = rest }
+        ((oldVars, oldCurrent):rest) -> 
+            put $ st { vars = oldVars, currentVars = oldCurrent, context = rest }
 
 lookupVar :: String -> CheckM Type
 lookupVar name = do
     st <- get
     case Map.lookup name (vars st) of
         Just t -> return t
-        Nothing -> throwError $ "Variável não está no escopo: " ++ name
+        Nothing -> case Map.lookup name (funcs st) of
+            Just (gens, args, ret) -> return (TFunc args ret)
+            Nothing -> throwError $ "Variável não está no escopo: " ++ name
 
 defineVar :: String -> Type -> CheckM ()
 defineVar name t = do
     st <- get
-    put $ st { vars = Map.insert name t (vars st) }
+    if Map.member name (currentVars st)
+        then throwError $ "Variável já declarada neste escopo: " ++ name
+        else put $ st { vars = Map.insert name t (vars st)
+                      , currentVars = Map.insert name t (currentVars st) 
+                      }
 
 -- Verifica se o tipo real coincide com o esperado
 expectType :: Type -> Type -> CheckM ()
@@ -82,28 +93,28 @@ collectSignatures (DefStruct (Struct name fields)) = do
         then throwError $ "Definição de struct duplicada: " ++ name
         else put $ st { structs = Map.insert name fieldMap (structs st) }
 
-collectSignatures (DefFunc (Func name _ params ret body)) = do
-    let paramTypes = map (parseTypeStr . snd) params
-    let retTypeVal = maybe TInt parseTypeStr ret -- Padrão int
+collectSignatures (DefFunc (Func name gens params ret body)) = do
+    let paramTypes = map (parseTypeWithGen gens . snd) params
+    let retTypeVal = maybe TInt (parseTypeWithGen gens) ret
     st <- get
     if Map.member name (funcs st)
         then throwError $ "Definição de função duplicada: " ++ name
-        else put $ st { funcs = Map.insert name (paramTypes, retTypeVal) (funcs st) }
+        else put $ st { funcs = Map.insert name (gens, paramTypes, retTypeVal) (funcs st) }
 
 -- Verifica o corpo de uma definição
 checkDef :: Definition -> CheckM ()
 checkDef (DefStruct _) = return ()
-checkDef (DefFunc (Func name _ params ret body)) = do
-    let retTypeVal = maybe TInt parseTypeStr ret
+checkDef (DefFunc (Func name gens params ret body)) = do
+    let retTypeVal = maybe TInt (parseTypeWithGen gens) ret
     st <- get
-    put $ st { retType = Just retTypeVal }
+    put $ st { retType = Just retTypeVal, activeGens = gens }
     
     enterScope
-    mapM_ (\(n, tStr) -> defineVar n (parseTypeStr tStr)) params
+    mapM_ (\(n, tStr) -> defineVar n (parseTypeWithGen gens tStr)) params
     mapM_ checkStmt body
     exitScope
     
-    put $ st { retType = Nothing }
+    put $ st { retType = Nothing, activeGens = [] }
 
 -- Verifica comandos/sentenças
 checkStmt :: Stmt -> CheckM ()
@@ -119,9 +130,10 @@ checkStmt (SLet name tStrVal mExpr) = do
         Just e -> checkExpr e
         Nothing -> return TVoid 
     
+    st <- get
     let tFinal = case tStrVal of
-            Just tStr -> parseTypeStr tStr
-            Nothing -> tRaw 
+            Just tStr -> parseTypeWithGen (activeGens st) tStr
+            Nothing -> tRaw
             
     case mExpr of
         Just _ -> expectType tFinal tRaw
@@ -196,11 +208,13 @@ checkExpr (ECall name args)
                 argTypes <- mapM checkExpr args
                 -- Verifica funções globais
                 case Map.lookup name (funcs st) of
-                    Just (expectedArgs, ret) -> do
+                    Just (gens, expectedArgs, ret) -> do
                         if length expectedArgs /= length argTypes
                             then throwError $ "Número de argumentos incorreto em: " ++ name
-                            else zipWithM_ expectType expectedArgs argTypes
-                        return ret
+                            else do
+                                -- Unificação básica para genéricos
+                                subst <- foldM (\acc (exp, act) -> satisfy acc exp act) Map.empty (zip expectedArgs argTypes)
+                                return (applySubst subst ret)
                     Nothing -> do
                         -- Verifica variáveis locais (Funções de Ordem Superior)
                         case Map.lookup name (vars st) of
@@ -223,7 +237,8 @@ checkExpr (EArray elems) = do
 checkExpr (ENew tStr size) = do
     tSize <- checkExpr size
     expectType TInt tSize
-    return (TArray (parseTypeStr tStr))
+    st <- get
+    return (TArray (parseTypeWithGen (activeGens st) tStr))
 
 checkExpr (EBin op e1 e2)
     | op == "[]" = do
@@ -281,3 +296,22 @@ checkExpr (EBin op e1 e2)
 
 checkExpr (EPost e _) = checkExpr e
 checkExpr (EPre _ e) = checkExpr e
+
+-- Unificação básica e Substituição
+satisfy :: Map String Type -> Type -> Type -> CheckM (Map String Type)
+satisfy s (TVar v) t = case Map.lookup v s of
+    Just t' -> if t == t' then return s else throwError $ "Inconsistência genérica para " ++ v
+    Nothing -> return $ Map.insert v t s
+satisfy s (TArray t1) (TArray t2) = satisfy s t1 t2
+satisfy s (TFunc args1 ret1) (TFunc args2 ret2) = do
+    if length args1 /= length args2 then throwError "HOF: Aridade diferente"
+    else do
+        s' <- foldM (\acc (a1, a2) -> satisfy acc a1 a2) s (zip args1 args2)
+        satisfy s' ret1 ret2
+satisfy s t1 t2 = if t1 == t2 then return s else throwError $ "Incompatibilidade: esperado " ++ show t1 ++ ", obtido " ++ show t2
+
+applySubst :: Map String Type -> Type -> Type
+applySubst s (TVar v) = Map.findWithDefault (TVar v) v s
+applySubst s (TArray t) = TArray (applySubst s t)
+applySubst s (TFunc args ret) = TFunc (map (applySubst s) args) (applySubst s ret)
+applySubst _ t = t

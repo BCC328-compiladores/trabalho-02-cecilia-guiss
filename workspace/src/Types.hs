@@ -1,6 +1,6 @@
 module Types where
 
-import Data.List (intercalate, isSuffixOf)
+import Data.List (intercalate, isSuffixOf, isInfixOf)
 
 data Type
     = TInt
@@ -12,6 +12,7 @@ data Type
     | TStruct String
     | TFunc [Type] Type -- (Argumentos) -> Retorno
     | TNull 
+    | TVar String       -- Variáveis de tipo (genéricos)
     deriving (Eq)
 
 instance Show Type where
@@ -22,8 +23,17 @@ instance Show Type where
     show TVoid = "void"
     show (TArray t) = show t ++ "[]"
     show (TStruct n) = n
+    show (TVar n) = n
     show (TFunc args ret) = "(" ++ intercalate ", " (map show args) ++ ") -> " ++ show ret
     show TNull = "null"
+
+-- Converte uma string no tipo correspondente, ciente de genéricos
+parseTypeWithGen :: [String] -> String -> Type
+parseTypeWithGen gens s
+    | s `elem` gens = TVar s
+    | "[]" `isSuffixOf` s = TArray (parseTypeWithGen gens (take (length s - 2) s))
+    | "->" `isInfixOf` s = parseFuncType gens s
+    | otherwise = parseTypeStr s
 
 -- Converte uma string no tipo correspondente
 parseTypeStr "" = TInt -- Padrão para int se o tipo for omitido
@@ -38,26 +48,16 @@ parseTypeStr s
     | last s == ']' = 
         case span (/= '[') s of
             (base, _) -> TArray (parseTypeStr base)
-    | "->" `isInfixOf` s = parseFuncType s
+    | "->" `isInfixOf` s = parseFuncType [] s
     | otherwise = TStruct s
 
--- Auxiliar para detecção de "->"
-isInfixOf :: String -> String -> Bool
-isInfixOf needle haystack = any (needle `isPrefixOf`) (tails haystack)
-  where
-    isPrefixOf [] _ = True
-    isPrefixOf _ [] = False
-    isPrefixOf (x:xs) (y:ys) = x == y && isPrefixOf xs ys
-    tails [] = []
-    tails xs = xs : tails (tail xs)
-
 -- Parser básico para tipos de função: (a,b) -> c
-parseFuncType :: String -> Type
-parseFuncType s = 
+parseFuncType :: [String] -> String -> Type
+parseFuncType gens s = 
     let (argsPart, retPart) = breakSubstring "->" s
         argsContent = extractArgs (trim argsPart)
         retStr = trim (drop 2 retPart)
-    in TFunc (map parseTypeStr argsContent) (parseTypeStr retStr)
+    in TFunc (map (parseTypeWithGen gens) argsContent) (parseTypeWithGen gens retStr)
 
 breakSubstring :: String -> String -> (String, String)
 breakSubstring needle [] = ([], [])

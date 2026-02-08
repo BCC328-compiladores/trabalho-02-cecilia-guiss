@@ -7,7 +7,8 @@ func factorial(n : int) : int {
     }
 }
 
-func main1() : int {
+
+func main() : int {
     let result : int = factorial(5);
     print(result);
     return 0;

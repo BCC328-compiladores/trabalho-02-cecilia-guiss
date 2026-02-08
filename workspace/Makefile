@@ -18,7 +18,10 @@ clean:
 	cabal clean
 
 run:
-	cabal run sl
+	@for f in $(TESTS); do \
+		printf "$(BOLD_BLUE)>> Running interpreter on $$f$(RESET)\n"; \
+		cabal run sl -- --run $$f || exit 1; \
+	done
 
 # Colors
 BOLD_BLUE := \033[1;34m
@@ -43,5 +46,11 @@ pretty:
 		cabal run sl -- --pretty $$f || exit 1; \
 	done
 
-test: lexer parser pretty
+typecheck:
+	@for f in $(TESTS); do \
+		printf "$(BOLD_BLUE)>> Running typechecker on $$f$(RESET)\n"; \
+		cabal run sl -- --typecheck $$f || exit 1; \
+	done
+
+test: lexer parser pretty typecheck
 	@echo "$(BOLD_GREEN)All tests passed!$(RESET)"
