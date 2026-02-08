@@ -45,4 +45,3 @@ pretty:
 
 test: lexer parser pretty
 	@echo "$(BOLD_GREEN)All tests passed!$(RESET)"
-

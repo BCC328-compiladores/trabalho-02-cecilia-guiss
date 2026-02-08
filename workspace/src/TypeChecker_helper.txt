@@ -1,0 +1,4 @@
+isVarInScope :: String -> CheckM Bool
+isVarInScope name = do
+    st <- get
+    return $ Map.member name (vars st)
