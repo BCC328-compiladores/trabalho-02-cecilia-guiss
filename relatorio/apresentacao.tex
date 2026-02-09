@@ -1,0 +1,247 @@
+\documentclass{beamer}
+\usepackage[utf8]{inputenc}
+\usepackage[brazil]{babel}
+\usepackage[T1]{fontenc}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{lmodern}
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+\usetheme{Madrid}
+\usecolortheme{whale}
+
+\title[Compilador SL]{Desenvolvimento do Compilador SL}
+\subtitle{Etapas 1 e 2: Arquitetura e Implementação Técnica}
+\author{Cecilia Peret, Guilherme Silva}
+\institute{DECOM - UFOP}
+\date{\today}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\lstset{
+    basicstyle=\ttfamily\scriptsize,
+    keywordstyle=\color{blue},
+    commentstyle=\color{codegreen},
+    stringstyle=\color{codepurple},
+    breaklines=true,
+    literate={á}{{\'a}}1 {ã}{{\~a}}1 {é}{{\'e}}1 {ê}{{\^e}}1 {í}{{\'i}}1 {ó}{{\'o}}1 {õ}{{\~o}}1 {ú}{{\'u}}1 {ç}{{\c{c}}}1 {Á}{{\'A}}1 {Ã}{{\~A}}1 {É}{{\'E}}1 {Ê}{{\^E}}1 {Í}{{\'I}}1 {Ó}{{\'O}}1 {Õ}{{\~O}}1 {Ú}{{\'U}}1 {Ç}{{\c{C}}}1
+}
+
+\begin{document}
+
+\begin{frame}
+    \titlepage
+\end{frame}
+
+\begin{frame}{Agenda}
+    \tableofcontents
+\end{frame}
+
+\section{Arquitetura Geral}
+\begin{frame}{Arquitetura Geral e Fluxo de Dados}
+    O desenvolvimento priorizou o uso idiomático de Haskell:
+    \begin{itemize}
+        \item \textbf{Fluxo:} Fonte $\to$ Tokens $\to$ AST $\to$ Verificação $\to$ Execução.
+        \item \textbf{Megaparsec:} Escolhido pela flexibilidade e tratamento de erros nativo e linguagem Haskell.
+
+    \end{itemize}
+\end{frame}
+
+\section{Lexer: Detalhes Técnicos}
+\begin{frame}[fragile]{Lexer: Implementação com Megaparsec}
+    O Lexer converte o fluxo de caracteres em uma lista de tokens \texttt{SLToken}.
+    \vfill
+    \begin{lstlisting}[language=Haskell, caption={Snippet: Parsing de Números e Palavras-chave}]
+pNumber = try pFloat <|> pInt
+  where
+    pInt = do
+      pos <- getSourcePos
+      value <- L.decimal
+      return (TkIntLit value pos)
+
+pKeyword = do
+  pos <- getSourcePos
+  choice [ TkFunc pos <$ string "func"
+         , TkLet pos  <$ string "let"
+         , TkForall pos <$ try (string "forall") ] <* notFollowedBy alphaNumChar
+    \end{lstlisting}
+\end{frame}
+
+\section{Parser: Estrutura da AST}
+\begin{frame}[fragile]{Parser: Construção da AST}
+    Responsável por validar a gramática e gerar a Árvore de Sintaxe Abstrata.
+    \vfill
+    \begin{lstlisting}[language=Haskell, caption={Snippet: Regra de Declaração de Variável}]
+pStmtLet = do
+    matchTok TkLet
+    name <- pIdent
+    mType <- optional (matchTok TkColon >> pType)
+    mExpr <- optional (matchTok TkAssign >> pExpr)
+    matchTok TkSemi
+    return (SLet name mType mExpr)
+    \end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{Parser: Estrutura da AST}
+    A AST representa os construtos da linguagem de forma abstrata:
+    \begin{itemize}
+        \item \textbf{Definition}: \texttt{DefFunc} ou \texttt{DefStruct}.
+        \item \texttt{Expr}: \texttt{ELit}, \texttt{EVar}, \texttt{EBin}, \texttt{ECall}, \texttt{EArray}, \texttt{ENew}.
+        \item \texttt{Stmt}: \texttt{SLet}, \texttt{SReturn}, \texttt{SIf}, \texttt{SWhile}, \texttt{SFor}.
+    \end{itemize}
+    \begin{lstlisting}[language=Haskell, basicstyle=\ttfamily\tiny]
+data Expr = EInt Int | EFloat Double | EVar String
+          | EBin String Expr Expr | ECall String [Expr]
+          | ENew String Expr | EArray [Expr] | ...
+    \end{lstlisting}
+\end{frame}
+
+\section{Análise Semântica}
+\begin{frame}{Análise Semântica: Gestão de Escopos}
+    O \texttt{TypeChecker} mantém um estado complexo para validação:
+    \begin{itemize}
+        \item \textbf{v\_env:} Mapeamento de variáveis locais por escopo (Shadowing).
+        \item \textbf{f\_env:} Mapeamento de assinaturas de funções globais.
+        \item \textbf{structs:} Definições de campos e seus tipos.
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Sistema de Tipos: Regras de Inferência}
+    Formalização dos julgamentos $\Gamma \vdash e : \tau$:
+    \vfill
+    \textbf{Variáveis e Aritmética:}
+    \[
+    \frac{\Gamma(x) = \tau}{\Gamma \vdash x : \tau} (Var) \quad \frac{\Gamma \vdash e_1 : \tau \quad \Gamma \vdash e_2 : \tau}{\Gamma \vdash e_1 + e_2 : \tau} (Arith)
+    \]
+    \vfill
+    \textbf{Controle (If):}
+    \[
+    \frac{\Gamma \vdash e : bool \quad \Gamma \vdash \{s_1\} \quad \Gamma \vdash \{s_2\}}{\Gamma \vdash \text{if } e \ s_1 \ \text{else } s_2} (If)
+    \]
+\end{frame}
+
+\begin{frame}[fragile]{Semântica: Unificação de Genéricos}
+    Suporte a polimorfismo via cláusula \texttt{forall} e genéricos aninhados.
+    \vfill
+    \begin{lstlisting}[language=Haskell, caption={Snippet: Algoritmo de Unificação}]
+satisfy :: Map String Type -> Type -> Type -> CheckM (Map String Type)
+satisfy s (TVar v) t = case Map.lookup v s of
+    Just t' -> if t == t' then return s 
+               else throwError $ "Inconsistência genérica para " ++ v
+    Nothing -> return $ Map.insert v t s
+satisfy s (TArray t1) (TArray t2) = satisfy s t1 t2
+satisfy s (TFunc args1 ret1) (TFunc args2 ret2) = -- Unificação recursiva de HOF
+    \end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{Semântica: Funções de Ordem Superior}
+    Validação de funções passadas como argumento ou retornadas.
+    \vfill
+    \begin{lstlisting}[language=Haskell, caption={Snippet: Verificação de Chamada HOF}]
+case Map.lookup name (vars st) of
+    Just (TFunc expectedArgs ret) -> do
+        if length expectedArgs /= length argTypes
+            then throwError "Número de argumentos incorreto na chamada HOF"
+            else zipWithM_ expectType expectedArgs argTypes
+        return ret
+    \end{lstlisting}
+\end{frame}
+
+\section{Interpretador}
+\begin{frame}{Interpretador: Ambiente Dinâmico}
+    A execução é baseada na redução direta da AST:
+    \begin{itemize}
+        \item \textbf{Ambiente:} Pilha de escopos \texttt{Map String Value}.
+        \item \textbf{Atribuições:} Suporte a atribuições complexas (campos de structs e índices de arrays).
+        \item \textbf{Memória:} Abstração de alocação via tipos de dados Haskell.
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Semântica Operacional: Big-Step}
+    A execução evolui o estado $\sigma$ através de julgamentos $(e, \sigma) \Downarrow v$:
+    \vfill
+    \textbf{Atribuição:}
+    \[
+    \frac{(e, \sigma) \Downarrow v \quad \sigma' = \sigma[x \mapsto v]}{(x = e, \sigma) \Downarrow (\sigma', v)} (Assign)
+    \]
+    \vfill
+    \textbf{Laço While:}
+    \[
+    \frac{(e, \sigma) \Downarrow \text{true} \quad (s, \sigma) \Downarrow \sigma_1 \quad (\text{while } e \ s, \sigma_1) \Downarrow \sigma_2}{(\text{while } e \ s, \sigma) \Downarrow \sigma_2} (While)
+    \]
+\end{frame}
+
+\begin{frame}[fragile]{Interpretador: L-Values e Agregados}
+    A atribuição lida com a mutação de sub-elementos de estruturas.
+    \vfill
+    \begin{lstlisting}[language=Haskell, caption={Snippet: Atualização de Campos em Structs}]
+updateAssign (EBin "." eStruct (EVar fName)) val = do
+    sVal <- evalExpr eStruct
+    case sVal of
+        VStruct fields -> do
+            let newFields = Map.insert fName val fields
+            updateAssign eStruct (VStruct newFields)
+        _ -> throwError "Alvo de atribuição inválido"
+    \end{lstlisting}
+\end{frame}
+
+\section{Casos de Teste}
+\begin{frame}{Sucessos: Testes Básicos e Recursão}
+    Validação das funções fornecidas pelo professor.
+    \begin{itemize}
+        \item \textbf{ex1.sl / ex2.sl:} Aritmética, condicionais e recursão clássica (Fibonacci).
+        \item \textbf{ex3.sl:} Funções com múltiplos argumentos e recursão profunda.
+        \item \textbf{Gestão de Pilha:} O interpretador suporta chamadas recursivas limitadas apenas pela heap do host.
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Sucessos: Recursos Avançados}
+    Demonstração da linguagem SL.
+    \begin{itemize}
+        \item \textbf{ex4.sl:} Alocação dinâmica de arrays e structs aninhadas.
+        \item \textbf{ex5.sl / ex6.sl:} Implementação de \texttt{map} e HOF polimórficos.
+        \item \textbf{ex7.sl:} operadores de efeito colateral (\texttt{++}/\texttt{--}).
+    \end{itemize}
+\end{frame}
+
+\section{Limitações e Erros}
+\begin{frame}{Limitações do Código e Design}
+    Restrições atuais e decisões de projeto do sistema:
+    \begin{itemize}
+        \item \textbf{Sem Inferência de Tipo Global:} Tipos de funções e estruturas devem ser explicitamente declarados.
+        \item \textbf{Sem Variáveis Globais:} Suporte apenas para funções e tipos no escopo global.
+        \item \textbf{Tipagem Estrita:} Proibido realizar operações entre tipos numéricos diferentes (ex: \texttt{int + float}).
+        \item \textbf{Faltantes Técnicos:} Ausência de sequências de escape em strings e comandos \texttt{break/continue}.
+    \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Casos de Teste de Erro}
+    A robustez da análise semântica em cenários de falha.
+    \begin{lstlisting}[language=C, caption={fail\_scope.sl}]
+func main() {
+    print(undeclared_var); // Semantica detecta erro antes da execucao
+}
+    \end{lstlisting}
+    \textbf{Erro gerado:} \textit{"Variável não está no escopo: undeclared\_var"}
+\end{frame}
+
+\section{Conclusão}
+\begin{frame}{Conclusão das Etapas 1 e 2}
+    \begin{itemize}
+        \item Arquitetura sólida e extensível em Haskell com o Megaparsec.
+        \item Sistema de tipos Genéricos e funções de ordem superior.
+        \item Interpretador funcional pronto para servir de referência.
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Próximos Passos: Etapa 3}
+    \begin{itemize}
+        \item Transição para Geração de Código.
+        \item Alvo: \textbf{WebAssembly (WASM)}.
+        \item Inferência de tipos.
+        \item Mapeamento de Closures e Structs para o modelo linear de memória do WASM.
+    \end{itemize}
+\end{frame}
+
+\end{document}
