@@ -95,7 +95,7 @@ collectSignatures (DefStruct (Struct name fields)) = do
 
 collectSignatures (DefFunc (Func name gens params ret body)) = do
     let paramTypes = map (parseTypeWithGen gens . snd) params
-    let retTypeVal = maybe TInt (parseTypeWithGen gens) ret
+    let retTypeVal = maybe TVoid (parseTypeWithGen gens) ret
     st <- get
     if Map.member name (funcs st)
         then throwError $ "Definição de função duplicada: " ++ name
@@ -105,7 +105,7 @@ collectSignatures (DefFunc (Func name gens params ret body)) = do
 checkDef :: Definition -> CheckM ()
 checkDef (DefStruct _) = return ()
 checkDef (DefFunc (Func name gens params ret body)) = do
-    let retTypeVal = maybe TInt (parseTypeWithGen gens) ret
+    let retTypeVal = maybe TVoid (parseTypeWithGen gens) ret
     st <- get
     put $ st { retType = Just retTypeVal, activeGens = gens }
     

@@ -287,7 +287,7 @@ evalExpr (EPre op (EVar n)) = do
 
 evalExpr _ = throwError "Expressão não suportada no interpretador"
 
--- Função auxiliar para lidar com atribuições (L-Values)
+-- Função auxiliar para lidar com atribuições 
 updateAssign :: Expr -> Value -> InterpM ()
 updateAssign (EVar name) val = do
     st <- get
