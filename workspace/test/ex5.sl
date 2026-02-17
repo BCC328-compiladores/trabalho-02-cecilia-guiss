@@ -1,5 +1,5 @@
 // Exemplo 5: função identidade
-func id(x) {
+func id(x: int) : int {
     return x;
 }
 
