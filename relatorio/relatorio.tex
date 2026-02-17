@@ -325,6 +325,136 @@ A segunda etapa do trabalho focou na implementa\c{c}\~{a}o da an\'{a}lise sem\^{
 
 O verificador de tipos percorre a AST e reporta erros sem\^{a}nticos detalhados.
 
+\subsection{Ambiente do verificador de tipos}
+
+O verificador de tipos utiliza um ambiente (registro Haskell chamado \texttt{Env}) que centraliza o estado necessário durante a checagem. A definição usada no código \texttt{workspace/src/TypeChecker.hs} é a seguinte:
+
+\begin{lstlisting}[language=Haskell]
+data Env = Env
+    { vars    :: Map String Type                 -- Todas as variáveis visíveis (incluindo escopos pais)
+    , currentVars :: Map String Type             -- Variáveis declaradas APENAS no escopo atual
+    , funcs   :: Map String ([String], [Type], Type)  -- (Genéricos, Argumentos, Retorno)
+    , structs :: Map String (Map String Type)    
+    , context :: [(Map String Type, Map String Type)] -- Pilha de (vars, currentVars)
+    , retType :: Maybe Type                      
+    , activeGens :: [String]                     -- Genéricos da função atual
+    }
+\end{lstlisting}
+
+A escolha desta organização foi motivada por simplicidade e eficiência durante a travessia da AST. Abaixo explicamos cada campo e a razão de projeto:
+
+\begin{itemize}
+    \item \textbf{\texttt{vars :: Map String Type}} -- armazena todas as variáveis visíveis no ponto atual da checagem, incluindo as vindas de escopos pais. Usar \texttt{Map} permite buscas O(log n) e código claro ao consultar tipos de identificadores.
+    \item \textbf{\texttt{currentVars :: Map String Type}} -- mantém apenas as variáveis declaradas no escopo corrente. Isso facilita detectar redeclarações no mesmo bloco (erro semântico) sem precisar comparar estruturas maiores de escopo.
+    \item \textbf{\texttt{funcs :: Map String ([String], [Type], Type)}} -- tabela de assinaturas de funções: lista de genéricos (nomes), tipos dos argumentos e tipo de retorno. As assinaturas são coletadas antes de verificar corpos (fase \emph{collectSignatures}), o que permite chamadas recursivas e checagem de HOFs.
+    \item \textbf{\texttt{structs :: Map String (Map String Type)}} -- mapeia nomes de \texttt{struct} para suas tabelas de campos (nome \textrightarrow tipo). Isso é usado para validar acessos a campos e construir tipos de literais/construtores de struct.
+    \item \textbf{\texttt{context :: [(Map String Type, Map String Type)]}} -- pilha usada para implementar entrada/saída de escopos: ao entrar num bloco empilhamos o par (\texttt{vars},\texttt{currentVars}) e, ao sair, restauramos o par anterior. Essa estratégia simplifica rollback de alterações locais.
+    \item \textbf{\texttt{retType :: Maybe Type}} -- guarda o tipo de retorno esperado da função corrente (se houver). Permite validar instruções \texttt{return} dentro do corpo da função.
+    \item \textbf{\texttt{activeGens :: [String]}} -- lista de genéricos ativos no escopo da função corrente. É usada para interpretar strings de tipo que podem referir variáveis de tipo genérico (por exemplo, \texttt{forall a.}).
+\end{itemize}
+
+
+Uma parte central deste ambiente que merece uma explicação mais detalhada é o campo \texttt{context} (a pilha de pares \texttt{(vars,currentVars)}), pois ele governa o comportamento de escopos, sombreamento e restauração de estado durante a travessia da AST.
+
+\paragraph{Por que armazenar \texttt{context} como um par?}
+Armazenar o par \texttt{(vars,currentVars)} em cada nível da pilha tem três vantagens práticas no design deste verificador:
+\begin{enumerate}
+    \item \textbf{Restauração O(1)}: ao sair de um escopo basta desempilhar o par e repor \texttt{vars} e \texttt{currentVars} exatamente como estavam — não é preciso iterar sobre chaves ou reconstruir mapas. Empurrar e desempilhar são operações O(1) na lista que usamos como pilha.
+    \item \textbf{Detecção fácil de redeclaração local}: como mantemos \texttt{currentVars} separado, checar "variável já declarada neste escopo" é apenas uma busca em \texttt{currentVars} (O(log n) na implementação com \texttt{Map}). Não precisamos fazer buscas complexas nem comparar com o mapa pai.
+    \item \textbf{Semântica de shadowing explícita}: quando uma variável local sombreia um nome de escopo pai, atualizamos \texttt{vars} com o novo mapeamento e guardamos o mapa antigo no par. Ao restaurar, o nome sombreado retorna ao seu estado anterior automaticamente.
+\end{enumerate}
+
+\paragraph{Custo comparado a alternativas}
+Uma alternativa óbvia seria não manter \texttt{vars} global e, em vez disso, procurar um identificador caminhando pela pilha de \texttt{currentVars} do topo até a raiz (modelo de pilha de níveis). Esse modelo tem a vantagem conceitual de ser puramente funcional, mas traz dois custos práticos:
+\begin{itemize}
+    \item cada lookup de variável pode precisar percorrer vários mapas (no pior caso, O(d \cdot log n) onde d é a profundidade de escopo), o que degrada performance em programas aninhados;
+    \item ao sair de um escopo, não precisamos restaurar nada explicitamente — mas acabamos pagando a conta nas buscas.
+\end{itemize}
+
+Outra alternativa seria reconstruir \texttt{vars} ao sair do escopo removendo explicitamente todas as chaves presentes em \texttt{currentVars}; isso é funcionalmente correto mas implica custo proporcional ao número de variáveis locais (cada remoção é O(log n)).
+
+Por isso o par \texttt{(vars,currentVars)} é um compromisso prático: lookups continuam rápidos (uma única busca em \texttt{vars}), declarações locais são fáceis de detectar (checar \texttt{currentVars}) e restauração do estado é direta (desempilhar o par). Para o escopo dos exercícios e exemplos da disciplina, essa escolha é simples e suficiente.
+
+\paragraph{Exemplo passo-a-passo}
+Segue um exemplo ilustrativo simplificado do conteúdo dos mapas durante a entrada/saída de um bloco.
+\begin{lstlisting}[basicstyle=\ttfamily\small]
+# Estado inicial
+vars       = { x : int, y : bool }
+currentVars= { }
+context    = [ ]
+
+# Ao entrar em um bloco (enterScope):
+context    = [ ({x:int,y:bool}, {}) ]
+currentVars= {}
+
+# Declaramos `let x : float = 0.0` dentro do bloco (shadowing):
+currentVars= { x : float }
+vars       = { x : float, y : bool }
+
+# Ao sair do bloco (exitScope):
+({oldVars,oldCurrent} : rest) = head context
+vars       = oldVars       -- { x : int, y : bool }
+currentVars= oldCurrent    -- { }
+context    = rest
+\end{lstlisting}
+
+Esse exemplo mostra como o shadowing é tratado sem operações complexas ao sair do escopo: a restauração é um simples desempilhamento.
+
+Implementacionalmente, o verificador de tipos roda dentro da monad transformer \texttt{ExceptT String (State Env)} (apelidada \texttt{CheckM}). Essa escolha reúne duas necessidades importantes:
+
+\begin{itemize}
+    \item tratamento de erros semânticos via \texttt{ExceptT} (mensagens claras e abortamento da checagem ao encontrar inconsistências),
+    \item manutenção de estado mutável do ambiente via \texttt{State Env} (entrada/saída de escopos, inserção de variáveis, atualização de tabelas de funções/structs) sem passar explicitamente o ambiente em todos os parâmetros.
+\end{itemize}
+
+Algumas decisões de projeto e trade-offs:
+\begin{itemize}
+    \item separar \texttt{currentVars} de \texttt{vars} facilita detectar redeclarações no mesmo nível e implementar shadowing de forma clara (variáveis novas são inseridas em \texttt{currentVars} e em \texttt{vars}).
+    \item guardar as assinaturas de funções em \texttt{funcs} antes de verificar corpos permite suporte natural a recursão e checagem modular (checar chamadas usando apenas a assinatura).
+    \item a representação de tipos (tipo \texttt{Type}) é tratada num módulo separado (\texttt{Types.hs}), mantendo o \texttt{Env} independente dos detalhes internos de tipos enquanto o acesso/compare é simples (\texttt{Eq} e construção de tipos compostos como \texttt{TArray} e \texttt{TFunc}).
+    \item o modelo é intencionalmente simples e suficiente para o subconjunto da linguagem SL abordado; casos mais avançados (inferência completa, solução de restrições rica) exigiriam uma estrutura de ambiente e mecanismos de unificação mais sofisticados.
+\end{itemize}
+
+No código, funções auxiliares como \texttt{enterScope}, \texttt{exitScope}, \texttt{defineVar} e \texttt{lookupVar} encapsulam as operações sobre o \texttt{Env}, mantendo o restante do verificador concentrado nas regras de tipos e reduzindo repetição de manipulação de estado.
+
+Abaixo estão trechos representativos dessas funções (retirados de \texttt{workspace/src/TypeChecker.hs}) e uma explicação do que fazem e por que são importantes:
+
+\begin{lstlisting}[language=Haskell]
+lookupVar :: String -> CheckM Type
+lookupVar name = do
+    st <- get
+    case Map.lookup name (vars st) of
+        Just t -> return t
+        Nothing -> case Map.lookup name (funcs st) of
+            Just (gens, args, ret) -> return (TFunc args ret)
+            Nothing -> throwError $ "Variável não está no escopo: " ++ name
+
+defineVar :: String -> Type -> CheckM ()
+defineVar name t = do
+    st <- get
+    if Map.member name (currentVars st)
+        then throwError $ "Variável já declarada neste escopo: " ++ name
+        else put $ st { vars = Map.insert name t (vars st)
+                      , currentVars = Map.insert name t (currentVars st) 
+                      }
+
+expectType :: Type -> Type -> CheckM ()
+expectType expected actual = 
+    if expected == actual 
+    then return () 
+    else throwError $ "Incompatibilidade de tipos: esperado " ++ show expected ++ ", obtido " ++ show actual
+\end{lstlisting}
+
+Explicação e motivação:
+\begin{itemize}
+    \item \textbf{\texttt{lookupVar}}: Pesquisa primeiro em \texttt{vars} (mapa que contém todas as variáveis visíveis). Se não encontrar um identificador, tenta \texttt{funcs} — isto permite tratar chamadas a funções nomeadas mesmo quando não há uma entrada específica em \texttt{vars} (as funções têm assinaturas guardadas em \texttt{funcs}). Se tudo falhar, lança um erro indicando que o identificador não está no escopo.
+    \item \textbf{\texttt{defineVar}}: Antes de inserir uma nova variável, verifica \texttt{currentVars} para evitar redeclarações no mesmo escopo (erro semântico). Se a variável não existe no escopo atual, insere a nova entrada em \texttt{currentVars} (para detectar redeclarações futuras neste escopo) e em \texttt{vars} (para que buscas posteriores encontrem o identificador rapidamente). Essa duplicação é intencional e compatível com o uso do par \texttt{(vars,currentVars)} na pilha de \texttt{context}.
+    \item \textbf{\texttt{expectType}}: Função utilitária que compara tipos esperados e obtidos; em caso de discrepância, emite uma mensagem de erro legível com os dois tipos (apoiando a depuração). Centralizar essa checagem evita repetição de código por toda a verificação de expressões e comandos.
+\end{itemize}
+
+Essas funções mantêm o verificador simples e modular: \texttt{lookupVar}/\texttt{defineVar} encapsulam a política de escopos e sombreamento; \texttt{expectType} encapsula a lógica de erro ao comparar tipos. Juntas, elas permitem que as regras de checagem (por exemplo, em \texttt{checkExpr} e \texttt{checkStmt}) continuem legíveis e diretas, delegando a infraestrutura de estado/erros ao \texttt{Env} e ao \texttt{CheckM}.
+
+
 \section{Interpretador (Etapa 2)}
 
 O m\'{o}dulo \texttt{Interpreter.hs} implementa a sem\^{a}ntica operacional da linguagem SL, permitindo a execu\c{c}\~{a}o direta da AST.
