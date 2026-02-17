@@ -3,7 +3,7 @@ module Pretty where
 import Prettyprinter
 import Text.Megaparsec.Pos (SourcePos, unPos, sourceLine, sourceColumn, sourcePosPretty)
 import SLToken
-import Parser (Definition(..), Func(..), Struct(..), Stmt(..), Expr(..))
+import Parser (Definition(..), Func(..), Struct(..), Stmt(..), Expr(..), GlobalLet(..))
 
 -- ... existing code ...
 
@@ -52,6 +52,8 @@ prettyToken tok = case tok of
   TkDot pos          -> pretty "." <+> prettyLineCol pos
   TkAssign pos       -> pretty "=" <+> prettyLineCol pos
   TkArrow pos        -> pretty "->" <+> prettyLineCol pos
+  TkBackSlash pos    -> pretty "\\" <+> prettyLineCol pos
+  TkDoubleColon pos  -> pretty "::" <+> prettyLineCol pos
 
   -- Operadores
   TkPlus pos         -> pretty "+" <+> prettyLineCol pos
@@ -73,9 +75,18 @@ prettyToken tok = case tok of
 
 
 -- Gerar código com prettyprinter
-prettyDefinition :: Definition -> Doc ann
 prettyDefinition (DefFunc f) = prettyFunc f
 prettyDefinition (DefStruct s) = prettyStruct s
+prettyDefinition (DefGlobalLet g) = prettyGlobalLet g
+
+prettyGlobalLet :: GlobalLet -> Doc ann
+prettyGlobalLet (GlobalLet name mType mExpr) = 
+    pretty "let" <+> pretty name <> showType mType <+> showInit mExpr <> semi
+  where
+    showType Nothing = mempty
+    showType (Just t) = pretty ":" <+> pretty t
+    showInit Nothing = mempty
+    showInit (Just e) = space <> equals <+> prettyExpr e
 
 prettyStruct :: Struct -> Doc ann
 prettyStruct (Struct name fields) =
@@ -150,6 +161,7 @@ prettyExpr expr = case expr of
     EBin op e1 e2 -> prettyExpr e1 <+> pretty op <+> prettyExpr e2
     EPre op e -> pretty op <> prettyExpr e
     EPost e op -> prettyExpr e <> pretty op
+    ELambda f -> prettyFunc f
 
 
 -- Converter AST para Pretty

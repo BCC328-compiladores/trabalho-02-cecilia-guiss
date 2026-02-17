@@ -1,15 +1,19 @@
 module ASTtoTree where
 
 import Data.Tree
-import Parser (Definition(..), Func(..), Struct(..), Stmt(..), Expr(..))
+import Parser (Definition(..), Func(..), Struct(..), Stmt(..), Expr(..), GlobalLet(..))
 
 -- Converte lista de Definições para Tree
 defsToTree :: [Definition] -> Tree String
 defsToTree defs = Node "Program" (map defToTree defs)
 
-defToTree :: Definition -> Tree String
 defToTree (DefFunc f) = funcToTree f
 defToTree (DefStruct s) = structToTree s
+defToTree (DefGlobalLet g) = globalLetToTree g
+
+globalLetToTree :: GlobalLet -> Tree String
+globalLetToTree (GlobalLet name typeStr mExpr) = 
+    Node ("Global Let " ++ name ++ maybe "" (": " ++) typeStr) (maybe [] (\e -> [exprToTree e]) mExpr)
 
 structToTree :: Struct -> Tree String
 structToTree (Struct name fields) =
@@ -56,3 +60,4 @@ exprToTree (ENew ty size) = Node ("New " ++ ty) [exprToTree size]
 exprToTree (EBin op e1 e2) = Node ("BinOp: " ++ op) [exprToTree e1, exprToTree e2]
 exprToTree (EPost e op) = Node ("Postfix: " ++ op) [exprToTree e]
 exprToTree (EPre op e) = Node ("Prefix: " ++ op) [exprToTree e]
+exprToTree (ELambda f) = Node "Lambda" [funcToTree f]

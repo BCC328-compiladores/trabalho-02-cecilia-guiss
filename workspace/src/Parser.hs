@@ -1,10 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Redundant variable capture" #-}
 {-# HLINT ignore "Use lambda-case" #-}
 {-# HLINT ignore "Use fromMaybe" #-}
-module Parser (parseSL, Definition(..), Func(..), Struct(..), Stmt(..), Expr(..)) where
+module Parser (parseSL, Definition(..), Func(..), Struct(..), Stmt(..), Expr(..), GlobalLet(..)) where
 
 import SLToken
 
@@ -14,15 +15,28 @@ import Control.Monad.Combinators.Expr
 import Text.Megaparsec
 import Data.Void
 import qualified Data.Set as Set
+import qualified Data.List.NonEmpty as NE
+import Data.Proxy
 
 type Parser = Parsec Void [SLToken]
+
+instance VisualStream [SLToken] where
+  showTokens _ = unwords . map show . NE.toList
+
+instance TraversableStream [SLToken] where
+  reachOffset o pst =
+    let (before, after) = splitAt (o - pstateOffset pst) (pstateInput pst)
+        newPos = case after of
+          [] -> pstateSourcePos pst
+          (t:_) -> getTokenPos t
+    in (Nothing, pst { pstateInput = after, pstateOffset = o, pstateSourcePos = newPos })
 
 -- Função principal do parser
 parseSLMP :: [SLToken] -> Either (ParseErrorBundle [SLToken] Void) [Definition]
 parseSLMP = runParser (many pTopItem <* eof) ""
 
 pTopItem :: Parser Definition
-pTopItem = try (DefStruct <$> pStruct) <|> (DefFunc <$> pFunc)
+pTopItem = try (DefStruct <$> pStruct) <|> (DefFunc <$> pFunc) <|> (DefGlobalLet <$> pGlobalLet)
 
 pStruct :: Parser Struct
 pStruct = do
@@ -53,6 +67,8 @@ data Expr
   | EBin String Expr Expr
   | EPost Expr String
   | EPre String Expr
+  | ELambda Func -- Func anônima
+  
   deriving (Show, Eq)
 
 data Stmt
@@ -62,19 +78,27 @@ data Stmt
   | SWhile Expr [Stmt]
   | SFor (Maybe Stmt) Expr (Maybe Expr) [Stmt]
   | SExpr Expr
+  | SDef Definition
   deriving (Show, Eq)
 
 data Definition
   = DefFunc Func
   | DefStruct Struct
+  | DefGlobalLet GlobalLet
   deriving (Show, Eq)
+
+data GlobalLet = GlobalLet
+  { lName :: String
+  , ltype :: Maybe String
+  , lval :: Maybe Expr
+  } deriving (Show, Eq)
 
 data Func = Func
   { fName :: String
   , fGenerics :: [String]
   , fParams :: [(String,String)]
   , fRet :: Maybe String
-  , fBody :: [Stmt]
+  , fBody :: [Stmt] 
   } deriving (Show, Eq)
 
 data Struct = Struct
@@ -84,17 +108,27 @@ data Struct = Struct
 
 parseSL :: [SLToken] -> Either String [Definition]
 parseSL toks = case parseSLMP toks of
-  Left err -> Left (show err)
+  Left err -> Left (errorBundlePretty err)
   Right fs -> Right fs
 
+updateParserPosition :: SourcePos -> Parser ()
+updateParserPosition pos = updateParserState $ \s -> s { statePosState = (statePosState s) { pstateSourcePos = pos } }
+
 satisfyTok :: (SLToken -> Bool) -> Parser SLToken
-satisfyTok f = token testLabel Set.empty
+satisfyTok f = do
+  t <- token testLabel Set.empty
+  updateParserPosition (getTokenPos t)
+  return t
   where
     testLabel t = if f t then Just t else Nothing
 
 -- | Consome um token específico e retorna um valor extraído dele
 matchTok :: (SLToken -> Maybe a) -> Parser a
-matchTok f = token f Set.empty
+matchTok f = do
+  res <- token (\t -> f t >>= \x -> Just (x, getTokenPos t)) Set.empty
+  let (x, pos) = res
+  updateParserPosition pos
+  return x
 
 isTk :: (SLToken -> Maybe b) -> (SLToken -> Bool)
 isTk f t = case f t of { Just _ -> True; Nothing -> False }
@@ -151,7 +185,7 @@ kwForall  = matchTok $ \t -> case t of { TkForall p -> Just t; _ -> Nothing }
 
 -- Symbols
 symLParen, symRParen, symLBrace, symRBrace, symLBracket, symRBracket :: Parser SLToken
-symComma, symSemicolon, symColon, symDot, symAssign, symArrow :: Parser SLToken
+symComma, symSemicolon, symColon, symDot, symAssign, symArrow, symDoubleColon, symBackSlash :: Parser SLToken
 
 symLParen    = matchTok $ \t -> case t of { TkLParen p -> Just t; _ -> Nothing }
 symRParen    = matchTok $ \t -> case t of { TkRParen p -> Just t; _ -> Nothing }
@@ -165,6 +199,8 @@ symColon     = matchTok $ \t -> case t of { TkColon p -> Just t; _ -> Nothing }
 symDot       = matchTok $ \t -> case t of { TkDot p -> Just t; _ -> Nothing }
 symAssign    = matchTok $ \t -> case t of { TkAssign p -> Just t; _ -> Nothing }
 symArrow     = matchTok $ \t -> case t of { TkArrow p -> Just t; _ -> Nothing }
+symBackSlash = matchTok $ \t -> case t of { TkBackSlash p -> Just t; _ -> Nothing }
+symDoubleColon = matchTok $ \t -> case t of { TkDoubleColon p -> Just t; _ -> Nothing }
 
 pFunc :: Parser Func
 pFunc = do
@@ -180,6 +216,36 @@ pFunc = do
     _      <- symRBrace
     return (Func name gens params ret body)
 
+pLambda :: Parser Func
+pLambda = do
+    let name = "lambda"
+    _      <- symBackSlash
+    gens   <- try pGenerics <|> return []
+    params <- pLambdaParams
+    ret    <- optional (symDoubleColon *> pType)
+    _      <- symArrow
+    body <- (symLBrace *> many pStmt <* symRBrace) <|> fmap (\e -> [SExpr e]) pExpr
+    return (Func name gens params ret body)
+
+pLambdaParams :: Parser [(String,String)]
+pLambdaParams = parenParam <|> singleParam
+  where
+    parenParam = do
+        _ <- symLParen
+        params <- pParam `sepBy` symComma
+        _ <- symRParen
+        return params
+    singleParam = do
+        p <- pParam
+        return [p]
+
+
+pParam :: Parser (String, String)
+pParam = do
+    name <- pIdent
+    tp   <- optional (symColon *> pType)
+    return (name, maybe "" id tp)
+
 pGenerics :: Parser [String]
 pGenerics = do
     _      <- kwForall
@@ -187,11 +253,6 @@ pGenerics = do
     _      <- symDot
     return idents
 
-pParam :: Parser (String, String)
-pParam = do
-    name <- pIdent
-    tp   <- optional (symColon *> pType)
-    return (name, maybe "" id tp)
 
 pType :: Parser String
 pType = do
@@ -251,6 +312,15 @@ pLet = do
     val  <- optional (symAssign *> pExpr)
     _    <- symSemicolon
     return $ SLet name tp val
+
+pGlobalLet :: Parser GlobalLet
+pGlobalLet = do
+    _    <- kwLet
+    name <- pIdent
+    tp   <- optional (symColon *> pType)
+    val  <- optional (symAssign *> pExpr)
+    _    <- symSemicolon
+    return $ GlobalLet name tp val
 
 pIf :: Parser Stmt
 pIf = do
@@ -333,6 +403,7 @@ pTerm = pPostfix atom
       , pNew
       , pArrayLit
       , try (symLParen *> pExpr <* symRParen)
+      , ELambda <$> pLambda
       , EVar    <$> pIdent
       ]
 

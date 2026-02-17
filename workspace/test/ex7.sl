@@ -1,4 +1,4 @@
-// Exemplo 7: incremento e decremento, e inferencia de tipo
+// Exemplo 7: incremento e decremento
 func main() : void {
     let x = 0;
     print(x);

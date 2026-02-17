@@ -104,6 +104,8 @@ pSymbol = do
       , TkRBracket pos  <$ char ']'
       , TkComma    pos  <$ char ','
       , TkSemicolon pos  <$ char ';'
+      , TkDoubleColon pos  <$ try (string "::")
+      , TkBackSlash     pos  <$ char '\\'
       , TkColon    pos  <$ char ':'
       , TkDot      pos  <$ char '.'
     ]
