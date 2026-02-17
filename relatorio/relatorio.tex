@@ -66,14 +66,26 @@ A linguagem SL \'{e} uma linguagem pequena usada para exerc\'{i}cios de compilad
 O projeto foi desenvolvido em Haskell usando a biblioteca Megaparsec para o lexer e uma implementa\c{c}\~{a}o manual de parser que consome tokens produzidos pelo lexer.
 
 \section{Metodologia}
-
-O desenvolvimento seguiu um ciclo iterativo: primeiro implementar o lexer, gerar tokens sobre arquivos de teste; em seguida implementar o parser por cima da lista de tokens. Para depura\c{c}\~{a}o, o projeto inclui uma interface CLI que permite imprimir tokens (modo \texttt{--lexer}) e tentar construir a AST (modo \texttt{--parser}).
-
-Adicionalmente, foram implementados n\'{o}s m\'{o}dulos auxiliares para visualiza\c{c}\~{a}o no terminal:
+O desenvolvimento seguiu um ciclo iterativo, orientado a testes e checagem de código. O fluxo típico foi:
 \begin{itemize}
-    \item \texttt{Pretty.hs}: Respons\'{a}vel pela formata\c{c}\~{a}o do c\'{o}digo (pretty printing), reconstruindo a s\'{i}ntaxe a partir da AST para exibi\c{c}\~{a}o leg\'{i}vel.
-    \item \texttt{ASTtoTree.hs}: Utiliza a biblioteca \texttt{Data.Tree} para gerar uma representa\c{c}\~{a}o hier\'{a}rquica (floresta) da AST, facilitando a verifica\c{c}\~{a}o da estrutura sint\'{a}tica analisada via terminal.
+    \item implementar incrementos pequenos no \texttt{lexer} e validar a lista de tokens contra casos de teste em \texttt{test/} (alvo \texttt{make lexer} ou \texttt{./sl --lexer});
+    \item implementar o \texttt{parser} sobre o token-stream produzido pelo lexer e inspecionar a AST usando a impressão em árvore (alvo \texttt{make parser} ou \texttt{./sl --parser});
+    \item quando a AST estava coerente, avançar para a checagem semântica (alvo \texttt{make typecheck} ou \texttt{./sl --typecheck}) e, por fim, validar a saída do pretty-printer (\texttt{make pretty} / \texttt{./sl --pretty}).
 \end{itemize}
+
+Para depuração e inspeção foram criados módulos auxiliares:
+\begin{itemize}
+    \item \texttt{Pretty.hs}: responsável pela formatação (pretty printing) que reconstrói uma versão legível do código a partir da AST;
+    \item \texttt{ASTtoTree.hs}: converte a AST para uma estrutura \texttt{Data.Tree} e imprime uma representação hierárquica (árvore) que facilita verificar a derivação sintática.
+\end{itemize}
+
+O componente de checagem semântica (\texttt{TypeChecker.hs}) foi desenvolvido após o parser. A abordagem foi dividir a checagem em duas fases:
+\begin{enumerate}
+    \item \textbf{Coleta de assinaturas} (\texttt{collectSignatures}): percorre definições top-level para popular \texttt{funcs} e \texttt{structs}, permitindo que chamadas recursivas e HOFs sejam resolvidas apenas com suas assinaturas;
+    \item \textbf{Verificação dos corpos} (\texttt{checkDef}, \texttt{checkStmt}, \texttt{checkExpr}): percorre a AST e valida tipos e escopos usando um ambiente mutável \texttt{Env} combinado com o monad stack \texttt{CheckM = ExceptT String (State Env)} para acumular estado e reportar erros legíveis.
+\end{enumerate}
+
+Esse fluxo iterativo (lexer → parser → typechecker) e o uso de alvos Make/flags da CLI garantiram ciclos de feedback curtos, facilitando a identificação e correção rápida de regressões.
 
 \subsection{Contribui\c{c}\~{o}es e dificuldades}
 
@@ -94,6 +106,7 @@ Adotar a representação \texttt{context :: [(Map String Type, Map String Type)]
 
 Essa decisão de projeto foi documentada e justificada na seção dedicada ao ambiente do verificador de tipos (mais adiante), e ajudou a reduzir bugs relacionados a escopos durante a validação com os testes em \texttt{test/}.
 
+Durante a implementação mantivemos um processo orientado a testes unitários e inspeção manual: pequenas alterações eram seguidas de execuções dos alvos do \texttt{Makefile} (\texttt{make lexer}, \texttt{make parser}, \texttt{make typecheck}, \texttt{make pretty}) e inspeção da saída (lista de tokens, árvore AST, resultado do typechecker, e saída pretty). Esse ciclo curto de feedback ajudou a localizar regressões cedo e a garantir que cada etapa (lexer, parser, typechecker) permanecesse consistente com as demais.
 
 As decis\~{o}es principais foram:
 \begin{itemize}
@@ -653,6 +666,8 @@ Resumo: os testes foram desenhados para cobrir os principais aspectos do front-e
 \section{An\'{a}lise Sem\^{a}ntica (Etapa 2)}
 
 A segunda etapa do trabalho focou na implementa\c{c}\~{a}o da an\'{a}lise sem\^{a}ntica e verifica\c{c}\~{a}o de tipos. O m\'{o}dulo \texttt{TypeChecker.hs} foi criado para realizar as seguintes valida\c{c}\~{o}es:
+
+Breve nota sobre a abordagem adotada na análise semântica: a checagem foi projetada em duas fases principais — (1) uma fase de coleta de assinaturas (\texttt{collectSignatures}) que percorre as definições de topo para popular \texttt{funcs} e \texttt{structs}, e (2) uma fase de verificação dos corpos (\texttt{checkDef}/\texttt{checkStmt}/\texttt{checkExpr}) que utiliza o ambiente \texttt{Env} e um \texttt{CheckM = ExceptT String (State Env)} para acumular estado e erros. Essa separação permite validar chamadas recursivas e detectar incompatibilidades de tipos de forma mais estruturada.
 
 \begin{itemize}
     \item \textbf{Verifica\c{c}\~{a}o de Tipos:} Valida\c{c}\~{a}o de tipos primitivos (\texttt{int, float, bool, string, void}) e tipos complexos (arrays, structs). O sistema de tipos \'{e} estrito, impedindo opera\c{c}\~{o}es entre tipos num\'{e}ricos diferentes (ex: \texttt{int + float}) para garantir seguran\c{c}a e clareza.
