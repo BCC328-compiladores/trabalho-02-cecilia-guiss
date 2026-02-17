@@ -50,6 +50,9 @@
 
 \maketitle
 
+% Allow slightly looser line breaking to avoid occasional overfull hboxes
+\sloppy
+
 \begin{abstract}
 Este relat\'{o}rio descreve a implementa\c{c}\~{a}o do analisador l\'{e}xico e sint\'{a}tico do compilador para a linguagem educativa SL, desenvolvido como trabalho pr\'{a}tico da disciplina. O projeto inclui um lexer baseado em Megaparsec, um parser token-driven implementado com Megaparsec sobre uma sequ\^{e}ncia de tokens (token-stream Parsec), uma AST que agora inclui defini\c{c}\~{o}es de \texttt{struct} e fun\c{c}\~{o}es, e uma interface de linha de comando para testar o analisador.
 \end{abstract}
@@ -71,6 +74,26 @@ Adicionalmente, foram implementados n\'{o}s m\'{o}dulos auxiliares para visualiz
     \item \texttt{Pretty.hs}: Respons\'{a}vel pela formata\c{c}\~{a}o do c\'{o}digo (pretty printing), reconstruindo a s\'{i}ntaxe a partir da AST para exibi\c{c}\~{a}o leg\'{i}vel.
     \item \texttt{ASTtoTree.hs}: Utiliza a biblioteca \texttt{Data.Tree} para gerar uma representa\c{c}\~{a}o hier\'{a}rquica (floresta) da AST, facilitando a verifica\c{c}\~{a}o da estrutura sint\'{a}tica analisada via terminal.
 \end{itemize}
+
+\subsection{Contribui\c{c}\~{o}es e dificuldades}
+
+Este trabalho foi desenvolvido em dupla, com as seguintes responsabilidades:
+\begin{itemize}
+    \item \textbf{Cecília Peret}: Análise sintática (parser) e implementa\c{c}\~{a}o do \texttt{TypeChecker} (checagem de tipos e verificação de escopo).
+    \item \textbf{Guilherme Silva}: Análise léxica (lexer) e implementações auxiliares / interpretadores.
+\end{itemize}
+
+Dificuldade enfrentada (Cecília): a principal dificuldade encontrada durante a implementação do verificador de tipos foi inicialmente projetar o campo \texttt{context} do ambiente de checagem sem representá-lo como um par \texttt{(vars, currentVars)}. No desenho inicial o contexto não preservava separadamente as variáveis do escopo atual e as variáveis visíveis dos escopos externos, o que causou problemas na restauração correta do estado ao sair de um escopo (por exemplo, ao sair de um bloco o sombreamento — shadowing — não era revertido corretamente) e tornou a deteção de redeclaração local mais complexa.
+
+Adotar a representação \texttt{context :: [(Map String Type, Map String Type)]} (uma pilha de pares \texttt{(vars, currentVars)}) resolveu esses problemas ao:
+\begin{itemize}
+    \item permitir empurrar uma cópia do par atual ao entrar em um novo escopo e restaurá-la exatamente ao sair (simplificando \texttt{enterScope}/\texttt{exitScope});
+    \item facilitar a implementação de \texttt{defineVar} (inserindo somente em \texttt{currentVars} e em \texttt{vars}), de forma que a deteção de redeclaração local é direta e a visibilidade global permanece consistente;
+    \item tornar mais simples a lógica de restauração do ambiente ao lidar com retornos ou saídas antecipadas (por exemplo, dentro de \texttt{if/else} e loops).
+\end{itemize}
+
+Essa decisão de projeto foi documentada e justificada na seção dedicada ao ambiente do verificador de tipos (mais adiante), e ajudou a reduzir bugs relacionados a escopos durante a validação com os testes em \texttt{test/}.
+
 
 As decis\~{o}es principais foram:
 \begin{itemize}
@@ -271,6 +294,95 @@ A AST \'{e} mantida simples e orientada \`{a}s necessidades imediatas do parser.
 
 Exemplo de n\'{o}: uma atribui\c{c}\~{a}o via \'{i}ndice, como \texttt{result[i] = f(v[i]);}, \'{e} representada usando n\'{o}s de indexa\c{c}\~{a}o (no parser implementado como um \texttt{EBin "[]"}) e atribui\c{c}\~{a}o como um \texttt{EBin "="} com o lado esquerdo e direito apropriados.
 
+\subsection{Sa\'{i}da do parser e organiza\c{c}\~{a}o da \'{a}rvore de an\'alise sint\'atica}
+
+Durante o desenvolvimento foi implementada uma rotina de impressão em formato de árvore (utilizada pelo utilitário CLI e pelo módulo \texttt{ASTtoTree.hs}) que produz uma representação legível da AST. A seguir incluímos a saída obtida ao executar o alvo \texttt{make parser} sobre os arquivos de teste (saída gerada no container de desenvolvimento):
+
+\begin{lstlisting}
+>> Running parser on test/ex1.sl
+Program
+|
++- Func: factorial (n:int) -> int
+|  |
+|  `- Body
+|     |
+|     `- If
+|        |
+|        +- BinOp: <=
+|        |  |
+|        |  +- Var: n
+|        |  |
+|        |  `- Int: 1
+|        |
+|        +- Then
+|        |  |
+|        |  `- Return
+|        |     |
+|        |     `- Int: 1
+|        |
+|        `- Else
+|           |
+|           `- Return
+|              |
+|              `- BinOp: *
+|                 |
+|                 +- Var: n
+|                 |
+|                 `- Call: factorial
+|                    |
+|                    `- BinOp: -
+|                       |
+|                       +- Var: n
+|                       |
+|                       `- Int: 1
+|
+`- Func: main () -> int
+   |
+   `- Body
+      |
+      +- Let result: int
+      |  |
+      |  `- Call: factorial
+      |     |
+      |     `- Int: 5
+      |
+      +- StmtExpr
+      |  |
+      |  `- Call: print
+      |     |
+      |     `- Var: result
+      |
+      `- Return
+         |
+         `- Int: 0
+
+... (saída completa para ex2..ex7 omitida aqui por brevidade; a versão completa foi incluída no arquivo de desenvolvimento) ...
+\end{lstlisting}
+
+Explicação da organização:
+\begin{itemize}
+    \item Raiz \texttt{Program}: contém uma lista de definições de topo (	exttt{Definition}) — funções (\texttt{Func}) e structs (\texttt{Struct}).
+    \item \texttt{Func: name (params) -> ret}: representa uma definição de função com assinatura explicitada; o filho \texttt{Body} contém os statements do corpo.
+    \item Nós de statements: são impressos com rótulos como \texttt{Let}, \texttt{Return}, \texttt{If}, \texttt{While}, \texttt{For}, \texttt{StmtExpr} (expressões usadas como instruções). Cada um contém os filhos relevantes (por exemplo, \texttt{Let} tem o identificador, tipo opcional e expressão de inicialização; \texttt{If} tem condição, \texttt{Then} e \texttt{Else}).
+    \item Nós de expressão: incluem \texttt{Var}, \texttt{Int}, \texttt{Float}, \texttt{String}, \texttt{Call}, \texttt{BinOp: OP}, \texttt{Postfix}, \texttt{Prefix}, \texttt{ArrayLit}, \texttt{New}, etc. Para chamadas, a impressão expõe o nome da função e seus argumentos como subnós; para \texttt{BinOp} o operador é impresso e os operandos aparecem abaixo.
+    \item Indexação e acesso a campo: na representação atual a indexação aparece como um \texttt{BinOp: []} (lado esquerdo: expressão que indexa, lado direito: índice) e acesso a campo como \texttt{BinOp: .} (lado esquerdo: expressão que contém o campo, lado direito: nome do campo), o que facilita a visualização uniforme de operações binárias pós-fixadas.
+    \item Formato textual: a impressão usa caracteres tipo \texttt{|}, \texttt{+-} e \texttt{`-} para representar ramos e níveis da árvore, seguindo o estilo clássico de impressões de árvores (gerado por uma combinação de \texttt{Data.Tree} e uma função auxiliar de pretty-print em \texttt{ASTtoTree.hs}). Isso melhora a inspeção manual dos testes e facilita localizar erros de parsing: cada token consumido e cada construtor AST têm uma linha dedicada.
+\end{itemize}
+
+Mapeamento para o código:
+\begin{itemize}
+    \item Os rótulos exibidos correspondem diretamente aos construtores definidos em \texttt{Parser.hs} (por exemplo, \texttt{DefFunc}, \texttt{DefStruct}, \texttt{EVar}, \texttt{ECall}, \texttt{EBin}, \texttt{SReturn}, \texttt{SLet}, etc.).
+    \item A função que transforma a AST em uma \texttt{Data.Tree} e imprime o resultado encontra-se em \texttt{ASTtoTree.hs}; ela faz o \'{m}apeamento de cada construtor AST para um rótulo textual e uma lista de filhos apropriada.
+    \item Essa saída é usada no alvo \texttt{make parser} para validar visualmente que a árvore produzida pelo parser corresponde à estrutura sintática esperada para cada teste.
+\end{itemize}
+
+Utilidade prática:
+\begin{itemize}
+    \item Depuração: facilita localizar onde o parser tomou uma decisão (por exemplo, se um operador foi tratado como unário vs binário, ou se uma chamada foi interpretada como literal de struct);
+    \item Testes: nos testes automatizados manualmente inspecionamos esta saída para garantir que construções complexas (arrays, structs, generics, overloads de operadores) gerem a AST esperada;
+    \item Integração: a estrutura impressa é próxima à representação que o \texttt{TypeChecker} e o gerador de código irão consumir, então a correspondência visual acelera o desenvolvimento das fases seguintes.
+\end{itemize}
+
 \section{An\'{a}lise sem\^{a}ntica e gera\c{c}\~{a}o de c\'{o}digo}
 
 Estas fases n\~{a}o foram implementadas integralmente no escopo atual. O projeto fornece a base (tokens + AST) necess\'{a}ria para implementar:
@@ -298,7 +410,178 @@ make test         # executa lexer, parser e pretty em sequencia
 \end{lstlisting}
 
 O reposit\'{o}rio tamb\'{e}m inclui um \texttt{docker-compose} para facilitar execu\c{c}\~{a}o em um container conforme instru\c{c}\~{o}es no \texttt{README.md} do projeto.
+ 
+\subsection{Prompts, comandos e resultados}
 
+Durante o desenvolvimento usamos um conjunto consistente de prompts/comandos (alvos do \texttt{Makefile} e flags do executável) para depurar, validar e guiar implementações. A seguir documentamos os comandos principais, exemplos de saída e como cada resultado foi usado no trabalho.
+
+\subsubsection{Lexer}
+Comando usado (Makefile):
+\begin{lstlisting}
+make lexer TESTS=test/ex3.sl
+# ou via executável
+./sl --lexer test/ex3.sl
+\end{lstlisting}
+
+Exemplo de saída (tokens resumidos):
+\begin{lstlisting}
+TkKeyword(func) TkIdent(reverse) TkLParen TkIdent(arr) TkColon TkIdent(int) ...
+TkIntLit 5 TkRBrace TkEOF
+\end{lstlisting}
+
+Como foi usado: essa saída foi essencial para verificar que o lexer reconhece palavras-chave, literais, identificadores e operadores corretamente, e que cada token preserva a posição (\texttt{SourcePos}). Problemas observados (por exemplo, tokens compostos não sendo reconhecidos como um só) foram corrigidos ajustando a ordem de tentativa em \texttt{pToken} (colocando operadores compostos antes de operadores simples).
+
+\subsubsection{Parser}
+Comando usado (Makefile):
+\begin{lstlisting}
+make parser TESTS=test/ex1.sl
+# ou
+./sl --parser test/ex1.sl
+\end{lstlisting}
+
+Exemplo de saída (árvore):
+\begin{lstlisting}
+Program
+|
++- Func: factorial (n:int) -> int
+|  `- Body
+|     `- If
+|        +- BinOp: <=
+|        `- Return
+\end{lstlisting}
+
+\begin{lstlisting}
+Program
+|
++- Func: factorial (n:int) -> int
+|  |
+|  `- Body
+|     |
+|     `- If
+|        |
+|        +- BinOp: <=
+|        |  |
+|        |  +- Var: n
+|        |  |
+|        |  `- Int: 1
+|        |
+|        +- Then
+|        |  |
+|        |  `- Return
+|        |     |
+|        |     `- Int: 1
+|        |
+|        `- Else
+|           |
+|           `- Return
+|              |
+|              `- BinOp: *
+|                 |
+|                 +- Var: n
+|                 |
+|                 `- Call: factorial
+|                    |
+|                    `- BinOp: -
+|                       |
+|                       +- Var: n
+|                       |
+|                       `- Int: 1
+|
+`- Func: main () -> int
+    |
+    `- Body
+        |
+        +- Let result: int
+        |  |
+        |  `- Call: factorial
+        |     |
+        |     `- Int: 5
+        |
+        +- StmtExpr
+        |  |
+        |  `- Call: print
+        |     |
+        |     `- Var: result
+        |
+        `- Return
+            |
+            `- Int: 0
+\end{lstlisting}
+
+Como foi usado: a impressão em forma de árvore (gerada por \texttt{ASTtoTree.hs}) permitiu validar a correspondência entre regras gramaticais e construtores AST. Sempre que um trecho de código de teste era parseado incorretamente (por exemplo, tratamento de chamadas de struct vs chamadas de função), a árvore mostrava exatamente qual construtor foi escolhido, guiando correções no \texttt{Parser.hs} (p.ex. ordem de alternativas, parser de postfix e associatividade de operadores).
+
+\subsubsection{TypeChecker}
+Comando usado (Makefile):
+\begin{lstlisting}
+make typecheck TESTS=test/ex5.sl
+# ou
+./sl --typecheck test/ex5.sl
+\end{lstlisting}
+
+Exemplo de saída (erro / sucesso):
+\begin{lstlisting}
+Type error at test/ex5.sl:12:5: expected void, found int
+-- ou --
+Typecheck OK
+\end{lstlisting}
+
+Como foi usado: o output do typechecker foi usado tanto para afinar as regras de tipos (p.ex. verificar compatibilidade entre arrays e indexação) quanto para localizar erros nos arquivos de teste (por exemplo, o caso onde uma função retornava \texttt{int} mas a assinatura esperava \texttt{void} — corrigido em \texttt{test/ex5.sl}). As mensagens de erro foram gradualmente melhoradas para incluir posição e descrição clara, facilitando correções rápidas.
+
+\subsubsection{Pretty / Pretty-printer}
+Comando usado (Makefile):
+\begin{lstlisting}
+make pretty TESTS=test/ex4.sl
+# ou
+./sl --pretty test/ex4.sl
+\end{lstlisting}
+
+Exemplo de saída:
+\begin{lstlisting}
+func calculateBMI(weight: float, height: float) : float {
+    return weight / (height * height);
+}
+\end{lstlisting}
+
+\begin{lstlisting}
+func calculateBMI (weight : float, height : float) : float {
+    return weight / height * height;
+}
+func isAdult (age : int) : bool {
+    return age >= 18;
+}
+func main () : void {
+    let bmi: float  = calculateBMI(70.5, 1.75);
+    let adult: bool  = isAdult(20);
+    print(bmi);
+    print(adult);
+    if (adult && bmi > 25.0) {
+        print("Adulto com sobrepeso");
+    } else {
+        print("Condição normal");
+    }
+}
+\end{lstlisting}
+
+Como foi usado: o pretty-printer foi utilizado para verificar que a AST tem informação suficiente para reconstruir uma forma legível do código-fonte (útil em debugging e para inspeção visual após transformações). Também serviu como verificação auxiliar após alterações no parser — se a saída pretty era razoável, a AST provavelmente estava correta.
+
+\subsubsection{Uso combinado e exemplos de fluxo}
+Um fluxo típico de desenvolvimento seguido repetidamente:
+\begin{enumerate}
+    \item Rodar \texttt{make lexer} para validar tokens e posições.
+    \item Rodar \texttt{make parser} e inspecionar a árvore para confirmar a derivação sintática.
+    \item Se a árvore estiver correta, rodar \texttt{make typecheck} para validar regras semânticas; caso haja erro, ajustar \texttt{TypeChecker.hs} ou o teste.
+    \item Rodar \texttt{make pretty} para confirmar que a AST pode ser revertida para uma forma canónica legível.
+\end{enumerate}
+
+\subsubsection{Consultas e dúvidas específicas}
+Além das execuções locais, documentamos consultas específicas (perguntas técnicas e decisões) que guiaram implementações — por exemplo:
+\begin{itemize}
+    \item "Como representar escopos e sombreamento no ambiente?" — motivou a escolha \texttt{context :: [(Map, Map)]} e a implementação de \texttt{enterScope}/\texttt{exitScope}.
+    \item "Como imprimir a AST para fácil inspeção?" — levou à implementação de \texttt{ASTtoTree.hs} e a função que converte construtores AST em \texttt{Data.Tree} para pretty-print.
+    \item "Como tratar genéricos na checagem de tipos?" — levou a adicionar \texttt{satisfy} e \texttt{applySubst} para unificação simples e aplicação de substituições em assinaturas de função.
+\end{itemize}
+
+Essas questões foram respondidas iterativamente combinando logs das execuções (acima) com inspeção do código e ajustes até que as saídas dos comandos refletissem o comportamento esperado.
 \section{Testes realizados}
 
 Foram utilizados arquivos de exemplo (por exemplo \texttt{test/ex2.sl}, \texttt{test/ex3.sl}, \texttt{test/ex6.sl}) para validar o lexer e o parser. Durante o desenvolvimento foram corrigidos problemas como:
@@ -310,6 +593,62 @@ Foram utilizados arquivos de exemplo (por exemplo \texttt{test/ex2.sl}, \texttt{
     \item suporte a literais de array e \`{a} express\~{a}o \texttt{new T[e]}.
     \item Foram criados 6 arquivos de teste cobrindo diversas constru\c{c}\~{o}es da linguagem SL. Todos est\~{a}o localizados na pasta test
 \end{itemize}
+
+\subsection{Lista de testes (pasta \texttt{test/})}
+
+O repositório inclui vários arquivos de teste localizados em \texttt{test/}. Abaixo listamos os ficheiros presentes e descrevemos, de forma concisa e ligada ao código do verificador, por que cada teste é considerado correto (isto é, por que o \emph{typechecker} os aceita).
+
+Arquivos de teste incluídos:
+\begin{itemize}
+    \item \texttt{test/ex1.sl}
+    \item \texttt{test/ex2.sl}
+    \item \texttt{test/ex3.sl}
+    \item \texttt{test/ex4.sl}
+    \item \texttt{test/ex5.sl}  % função identidade (mostrada abaixo)
+    \item \texttt{test/ex6.sl}
+    \item \texttt{test/ex7.sl}
+    \item \texttt{test/ex8.sl}
+    \item \texttt{test/fail_scope.sl} % teste com falha de escopo
+\end{itemize}
+
+Como o verificador opera (resumo do mecanismo usado para aceitar os testes):
+\begin{enumerate}
+    \item Antes de checar corpos de funções, o programa chama \texttt{collectSignatures} para preencher \texttt{funcs} e \texttt{structs} com assinaturas e definições top-level. Isso permite que chamadas recursivas e referências a structs sejam validadas apenas com sua assinatura (veja a função \texttt{collectSignatures} em \texttt{TypeChecker.hs}).
+    \item Para cada definição (função/struct) o verificador chama \texttt{checkDef} que: seta o \texttt{retType}, entra em escopo com \texttt{enterScope}, registra parâmetros com \texttt{defineVar} e verifica o corpo com \texttt{checkStmt} (que por sua vez usa \texttt{checkExpr}).
+    \item A resolução de identificadores usa \texttt{lookupVar} (procura em \texttt{vars}) e também consulta \texttt{funcs} caso o nome corresponda a uma função. \texttt{defineVar} garante deteção de redeclaração no mesmo escopo ao inserir em \texttt{currentVars} e \texttt{vars}.
+    \item Verificações de compatibilidade de tipos são centralizadas em \texttt{expectType} (compara dois \texttt{Type} e emite erro se divergirem). Para funções genéricas, a checagem utiliza \texttt{satisfy} para construir uma substituição de variáveis de tipo e \texttt{applySubst} para aplicar essa substituição ao tipo de retorno esperado.
+    \item Regras específicas (indexação, acesso a campos, operadores aritméticos/ lógicos, etc.) são tratadas em \texttt{checkExpr} e reportam mensagens de erro claras quando a forma/ tipos não batem.
+\end{enumerate}
+
+Exemplo concreto: \texttt{test/ex5.sl}
+\begin{lstlisting}
+// Exemplo 5: função identidade
+func id(x : int) : int {
+    return x;
+}
+
+func main() : void {
+    let value : int = 5;
+    let identity = id(value);
+    print(identity);
+}
+\end{lstlisting}
+
+Por que \texttt{ex5.sl} passou no \texttt{typechecker}:
+\begin{itemize}
+    \item \texttt{collectSignatures} registra a assinatura de \texttt{id} como \texttt{([], [int], int)} em \texttt{funcs} (sem genéricos neste caso).
+    \item Ao checar a chamada \texttt{id(value)} o verificador avalia o argumento \texttt{value} e obtém \texttt{int} (via \texttt{checkExpr} e \texttt{lookupVar}).
+    \item \texttt{checkExpr} para chamada encontra a assinatura em \texttt{funcs} e compara os tipos esperados dos argumentos com os tipos efetivamente passados; aqui \texttt{expectType} confirma que ambos são \texttt{int}.
+    \item O tipo de retorno de \texttt{id} (\texttt{int}) é então usado como tipo de \texttt{identity} (por \texttt{applySubst} no caso genérico; aqui não há substituições) e \texttt{print} aceita valores sem tipo de retorno (\texttt{print} é tratada especialmente e retorna \texttt{void}).
+\end{itemize}
+
+Teste de falha de escopo: \texttt{test/failscope.sl}
+\begin{itemize}
+    \item Este arquivo (intencionalmente) tenta acessar/usar uma variável fora do seu escopo. O verificador detecta isso em \texttt{lookupVar} (que não encontra a entrada em \texttt{vars} e não há assinatura de função correspondente em \texttt{funcs}) e lança um erro "Variável não está no escopo". Essa falha valida a corretude da implementação de \texttt{enterScope}/\texttt{exitScope} e do mecanismo de restauração do \texttt{context}.
+\end{itemize}
+
+Resumo: os testes foram desenhados para cobrir os principais aspectos do front-end: tokenização/lexer, parse, estrutura de AST, regras de tipos (incluindo arrays, structs, chamadas, e genéricos simples) e verificação de escopo. O verificador implementado usa \texttt{ExpectT String (State Env)} para combinar mensagens de erro legíveis com um ambiente mutável acessível por todas as rotinas de checagem; funções centrais como \texttt{expectType}, \texttt{satisfy}, \texttt{applySubst}, \texttt{lookupVar} e \texttt{defineVar} são responsáveis por garantir que os programas de teste estejam semanticamente corretos.
+
 
 \section{An\'{a}lise Sem\^{a}ntica (Etapa 2)}
 
@@ -367,11 +706,11 @@ Armazenar o par \texttt{(vars,currentVars)} em cada nível da pilha tem três va
 \paragraph{Custo comparado a alternativas}
 Uma alternativa óbvia seria não manter \texttt{vars} global e, em vez disso, procurar um identificador caminhando pela pilha de \texttt{currentVars} do topo até a raiz (modelo de pilha de níveis). Esse modelo tem a vantagem conceitual de ser puramente funcional, mas traz dois custos práticos:
 \begin{itemize}
-    \item cada lookup de variável pode precisar percorrer vários mapas (no pior caso, O(d \cdot log n) onde d é a profundidade de escopo), o que degrada performance em programas aninhados;
-    \item ao sair de um escopo, não precisamos restaurar nada explicitamente — mas acabamos pagando a conta nas buscas.
+    \item \begin{minipage}[t]{\linewidth}cada lookup de variável pode precisar percorrer vários mapas, o que degrada performance em programas aninhados;\end{minipage}
+    \item \begin{minipage}[t]{\linewidth}ao sair de um escopo, não precisamos restaurar nada explicitamente — mas acabamos pagando a conta nas buscas.\end{minipage}
 \end{itemize}
 
-Outra alternativa seria reconstruir \texttt{vars} ao sair do escopo removendo explicitamente todas as chaves presentes em \texttt{currentVars}; isso é funcionalmente correto mas implica custo proporcional ao número de variáveis locais (cada remoção é O(log n)).
+Outra alternativa seria reconstruir \texttt{vars} ao sair do escopo, removendo explicitamente todas as chaves presentes em \texttt{currentVars}; isso é funcionalmente correto mas implica custo proporcional ao número de variáveis locais (cada remoção é O(log n)).
 
 Por isso o par \texttt{(vars,currentVars)} é um compromisso prático: lookups continuam rápidos (uma única busca em \texttt{vars}), declarações locais são fáceis de detectar (checar \texttt{currentVars}) e restauração do estado é direta (desempilhar o par). Para o escopo dos exercícios e exemplos da disciplina, essa escolha é simples e suficiente.
 
