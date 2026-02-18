@@ -299,6 +299,7 @@ pStmt = choice
     , pWhile
     , pFor
     , SExpr <$> (pExpr <* optional symSemicolon)
+    , SDef <$> pTopItem
     ]
 
 pReturn :: Parser Stmt

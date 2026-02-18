@@ -48,6 +48,7 @@ stmtToTree (SFor mInit cond mIncr body) =
                , Node "Body" (map stmtToTree body)
                ]
 stmtToTree (SExpr e) = Node "StmtExpr" [exprToTree e]
+stmtToTree (SDef d) = defToTree d
 
 exprToTree :: Expr -> Tree String
 exprToTree (EInt i) = Node ("Int: " ++ show i) []

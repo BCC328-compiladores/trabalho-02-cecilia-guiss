@@ -13,7 +13,7 @@ func main(): void {
     for (let i : int = 0; i < doubled.size; i++) {
         print(doubled[i]);
     }
-    tripled_func = \x : int :: int -> x * 3;
+    let tripled_func = \x : int :: int -> x * 3;
     let tripled: int[] = map(tripled_func, nums);
     
     for (let i : int = 0; i < doubled.size; i++) {

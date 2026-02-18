@@ -133,6 +133,7 @@ prettyStmt stmt = case stmt of
         indent 4 (vsep (map prettyStmt body)) <> line <>
         rbrace
     SExpr e -> prettyExpr e <> semi
+    SDef d -> prettyDefinition d
 
     where
       showType Nothing = mempty
