@@ -5,7 +5,7 @@ import Control.Monad.Except
 import Control.Monad (void)
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.List (isSuffixOf, isInfixOf, intercalate)
+import Data.List (isSuffixOf, isInfixOf, isPrefixOf, intercalate)
 import Parser
 import Types
 
@@ -20,6 +20,7 @@ data Value
     | VVoid
     | VFunc [String] [Stmt] (Map String Value) -- Closure simples (params, corpo, contexto capturado)
     | VNull
+    | VClosure Value Value -- (Função, Ambiente)
     deriving (Eq)
 
 instance Show Value where
@@ -32,6 +33,7 @@ instance Show Value where
     show VVoid = "void"
     show (VFunc _ _ _) = "<function>"
     show VNull = "null"
+    show (VClosure _ _) = "<closure>"
 
 -- Estado do Interpretador
 data InterpState = InterpState
@@ -232,7 +234,21 @@ evalExpr (ECall "print" args) = do
     liftIO $ putStrLn (concatMap show vals)
     return VVoid
 
-evalExpr (ECall name args) = do
+evalExpr (ECall "make_closure" [f, env]) = do
+    fv <- evalExpr f
+    ev <- evalExpr env
+    return (VClosure fv ev)
+
+evalExpr (ECall name args)
+    | "new_" `isPrefixOf` name = do
+        let sName = drop 4 name
+        st <- get
+        case Map.lookup sName (structs st) of
+            Just fieldNames -> do
+                argVals <- mapM evalExpr args
+                return $ VStruct (Map.fromList (zip fieldNames argVals))
+            Nothing -> throwError $ "Struct " ++ sName ++ " não encontrada"
+    | otherwise = do
     st <- get
     case Map.lookup name (structs st) of
         Just fieldNames -> do
@@ -245,17 +261,14 @@ evalExpr (ECall name args) = do
             case fVal of
                 VFunc params body closureEnv -> do
                     argVals <- mapM evalExpr args
-                    if length params /= length argVals
-                        then throwError "Número incorreto de argumentos"
-                        else do
-                            -- Função ganha um escopo de ativação novo
-                            oldScopes <- gets scopes
-                            let funcEnv = Map.union (Map.fromList (zip params argVals)) closureEnv
-                            modify $ \s -> s { scopes = [funcEnv] }
-                            res <- execStmts body
-                            modify $ \s -> s { scopes = oldScopes }
-                            return res
-                _ -> throwError $ name ++ " não é uma função"
+                    applyFunc params body (Map.union (Map.fromList (zip params argVals)) closureEnv)
+                VClosure (VFunc params body closureEnv) envVal -> do
+                    argVals <- mapM evalExpr args
+                    -- Passa o ambiente como primeiro argumento e o resto depois
+                    let allArgs = envVal : argVals 
+                    applyFunc params body (Map.union (Map.fromList (zip params allArgs)) closureEnv)
+                _ -> throwError $ name ++ " não é uma função ou closure"
+
 
 evalExpr (EArray elems) = do
     vals <- mapM evalExpr elems
@@ -286,6 +299,14 @@ evalExpr (EPre op (EVar n)) = do
         _ -> throwError "Operador ++/-- requer inteiro"
 
 evalExpr _ = throwError "Expressão não suportada no interpretador"
+
+applyFunc :: [String] -> [Stmt] -> Map String Value -> InterpM Value
+applyFunc params body env = do
+    oldScopes <- gets scopes
+    modify $ \s -> s { scopes = [env] }
+    res <- execStmts body
+    modify $ \s -> s { scopes = oldScopes }
+    return res
 
 -- Função auxiliar para lidar com atribuições 
 updateAssign :: Expr -> Value -> InterpM ()

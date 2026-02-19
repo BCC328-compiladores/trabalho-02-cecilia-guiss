@@ -101,20 +101,37 @@ collectSignatures (DefFunc (Func name gens params ret body)) = do
         then throwError $ "Definição de função duplicada: " ++ name
         else put $ st { funcs = Map.insert name (gens, paramTypes, retTypeVal) (funcs st) }
 
+collectSignatures (DefGlobalLet (GlobalLet name tStr mExpr)) = do
+    let t = case tStr of
+              Just s -> parseTypeStr s
+              Nothing -> TInt -- ou implementar inferencia
+    defineVar name t
+
 -- Verifica o corpo de uma definição
 checkDef :: Definition -> CheckM ()
 checkDef (DefStruct _) = return ()
 checkDef (DefFunc (Func name gens params ret body)) = do
     let retTypeVal = maybe TVoid (parseTypeWithGen gens) ret
-    st <- get
-    put $ st { retType = Just retTypeVal, activeGens = gens }
+    
+    -- Salva o estado anterior para suportar aninhamento
+    oldRet <- gets retType
+    oldGens <- gets activeGens
+    
+    modify $ \s -> s { retType = Just retTypeVal, activeGens = gens }
     
     enterScope
     mapM_ (\(n, tStr) -> defineVar n (parseTypeWithGen gens tStr)) params
-    mapM_ checkStmt body
+    checkBlock body
+    
     exitScope
     
-    put $ st { retType = Nothing, activeGens = [] }
+    -- Restaura o estado anterior (importante para closures/aninhadas)
+    modify $ \s -> s { retType = oldRet, activeGens = oldGens }
+
+checkDef (DefGlobalLet (GlobalLet _ (Just tStr) (Just expr))) = do
+    tExpr <- checkExpr expr
+    expectType (parseTypeStr tStr) tExpr
+checkDef (DefGlobalLet _) = return ()
 
 -- Verifica comandos/sentenças
 checkStmt :: Stmt -> CheckM ()
@@ -145,12 +162,12 @@ checkStmt (SIf cond thenBlk mElseBlk) = do
     tCond <- checkExpr cond
     expectType TBool tCond
     enterScope
-    mapM_ checkStmt thenBlk
+    checkBlock thenBlk
     exitScope
     case mElseBlk of
         Just elseBlk -> do
             enterScope
-            mapM_ checkStmt elseBlk
+            checkBlock elseBlk
             exitScope
         Nothing -> return ()
 
@@ -158,7 +175,7 @@ checkStmt (SWhile cond body) = do
     tCond <- checkExpr cond
     expectType TBool tCond
     enterScope
-    mapM_ checkStmt body
+    checkBlock body
     exitScope
 
 checkStmt (SFor mInit cond mIncr body) = do
@@ -182,11 +199,19 @@ checkStmt (SFor mInit cond mIncr body) = do
         Nothing -> return ()
         
     enterScope
-    mapM_ checkStmt body
+    checkBlock body
     exitScope
     exitScope
 
 checkStmt (SExpr e) = void $ checkExpr e
+
+checkStmt (SDef (DefFunc f)) = do
+    let paramTypes = map (parseTypeWithGen (fGenerics f) . snd) (fParams f)
+    let retTypeVal = maybe TVoid (parseTypeWithGen (fGenerics f)) (fRet f)
+    -- Define localmente como um valor de função
+    defineVar (fName f) (TFunc paramTypes retTypeVal)
+    checkDef (DefFunc f)
+checkStmt (SDef d) = checkDef d -- Para outros tipos de definições locais
 
 -- Verifica expressões
 checkExpr :: Expr -> CheckM Type
@@ -296,6 +321,11 @@ checkExpr (EBin op e1 e2)
 
 checkExpr (EPost e _) = checkExpr e
 checkExpr (EPre _ e) = checkExpr e
+checkExpr (ELambda f) = do
+    let paramTypes = map (parseTypeWithGen (fGenerics f) . snd) (fParams f)
+    let retTypeVal = maybe TVoid (parseTypeWithGen (fGenerics f)) (fRet f)
+    checkDef (DefFunc f)
+    return (TFunc paramTypes retTypeVal)
 
 -- Unificação básica e Substituição
 satisfy :: Map String Type -> Type -> Type -> CheckM (Map String Type)
@@ -315,3 +345,21 @@ applySubst s (TVar v) = Map.findWithDefault (TVar v) v s
 applySubst s (TArray t) = TArray (applySubst s t)
 applySubst s (TFunc args ret) = TFunc (map (applySubst s) args) (applySubst s ret)
 applySubst _ t = t
+
+-- Helpers para fluxo de controle e exaustividade
+checkBlock :: [Stmt] -> CheckM ()
+checkBlock [] = return ()
+checkBlock (s:ss) = do
+    checkStmt s
+    if stmtGuaranteesReturn s && not (null ss)
+        then throwError "Código inalcançável detectado: existem comandos após um return"
+        else checkBlock ss
+
+stmtGuaranteesReturn :: Stmt -> Bool
+stmtGuaranteesReturn (SReturn _) = True
+stmtGuaranteesReturn (SIf _ thenBlk (Just elseBlk)) = 
+    allPathsReturn thenBlk && allPathsReturn elseBlk
+stmtGuaranteesReturn _ = False
+
+allPathsReturn :: [Stmt] -> Bool
+allPathsReturn stmts = any stmtGuaranteesReturn stmts

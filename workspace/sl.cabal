@@ -8,7 +8,7 @@ cabal-version:       >=1.10
 
 executable sl
   main-is:             Main.hs
-  other-modules:       Lexer, SLToken, Pretty, Parser, ASTtoTree, Types, TypeChecker, Interpreter
+  other-modules:       Lexer, SLToken, Pretty, Parser, ASTtoTree, Types, TypeChecker, Interpreter, ClosureConverter
   build-depends:       base >=4.12 && <5,
                      array,
                      containers,

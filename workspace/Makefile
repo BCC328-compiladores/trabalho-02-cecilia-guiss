@@ -52,5 +52,11 @@ typecheck:
 		cabal run sl -- --typecheck $$f || exit 1; \
 	done
 
-test: lexer parser pretty typecheck
+closure:
+	@for f in $(TESTS); do \
+		printf "$(BOLD_BLUE)>> Running closure converter on $$f$(RESET)\n"; \
+		cabal run sl -- --closure $$f || exit 1; \
+	done
+
+test: lexer parser pretty typecheck closure
 	@echo "$(BOLD_GREEN)All tests passed!$(RESET)"

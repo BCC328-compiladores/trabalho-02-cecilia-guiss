@@ -1,6 +1,6 @@
 // Exemplo 11: Funções Aninhadas para closure conversion
 
-func make_adder(x: int) : int {
+func make_adder(x: int) : (int) -> int {
     func adder(y: int) : int {
         return x +y ;
     }

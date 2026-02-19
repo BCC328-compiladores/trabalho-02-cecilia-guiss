@@ -1,3 +1,9 @@
+func f(x : int) : int {
+    return x+1;
+    x++;
+}
+
 func main() {
-    print(undeclared_var);
+    let x : int = 1;
+    x = f(x);
 }
