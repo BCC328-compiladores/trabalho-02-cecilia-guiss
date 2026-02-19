@@ -7,6 +7,7 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import Types
 import Parser
+import Infer
 
 -- Ambiente do Verificador de Tipos
 data Env = Env
@@ -17,6 +18,7 @@ data Env = Env
     , context :: [(Map String Type, Map String Type)] -- Pilha de (vars, currentVars)
     , retType :: Maybe Type                      
     , activeGens :: [String]                     -- Genéricos da função atual
+    , nextVar :: Int                              -- Contador para geração de TVar frescas (para inferência)
     }
 
 type CheckM a = ExceptT String (State Env) a
@@ -25,7 +27,7 @@ runCheck :: CheckM a -> Either String a
 runCheck ma = evalState (runExceptT ma) emptyEnv
 
 emptyEnv :: Env
-emptyEnv = Env Map.empty Map.empty Map.empty Map.empty [] Nothing []
+emptyEnv = Env Map.empty Map.empty Map.empty Map.empty [] Nothing [] 0
 
 -- Verifica se uma variável está no escopo atual
 isVarInScope :: String -> CheckM Bool
@@ -56,6 +58,20 @@ lookupVar name = do
         Nothing -> case Map.lookup name (funcs st) of
             Just (gens, args, ret) -> return (TFunc args ret)
             Nothing -> throwError $ "Variável não está no escopo: " ++ name
+
+
+-- Run an Infer action using the Env.nextVar counter; update the counter and
+-- lift errors into CheckM. We avoid referring to the local `Infer` alias
+-- here (not exported) and use the concrete ExceptT/State type.
+runInferInCheckM :: ExceptT String (State Int) a -> CheckM a
+runInferInCheckM action = do
+    st <- get
+    let seed = nextVar st
+    let (res, seed') = runInfer action seed
+    put $ st { nextVar = seed' }
+    case res of
+        Left err -> throwError err
+        Right v -> return v
 
 defineVar :: String -> Type -> CheckM ()
 defineVar name t = do
@@ -186,7 +202,13 @@ checkStmt (SFor mInit cond mIncr body) = do
     exitScope
     exitScope
 
+
+
 checkStmt (SExpr e) = void $ checkExpr e
+checkStmt (SDef d) = checkDef d
+-- Catch-all to avoid runtime crash from non-exhaustive patterns and provide
+-- a helpful error message showing the unexpected statement node.
+checkStmt stmt = throwError $ "Internal: checkStmt: caso não implementado para: " ++ show stmt
 
 -- Verifica expressões
 checkExpr :: Expr -> CheckM Type
@@ -212,9 +234,9 @@ checkExpr (ECall name args)
                         if length expectedArgs /= length argTypes
                             then throwError $ "Número de argumentos incorreto em: " ++ name
                             else do
-                                -- Unificação básica para genéricos
+                                -- Unificação básica para genéricos (usando Infer.unify via runInferInCheckM)
                                 subst <- foldM (\acc (exp, act) -> satisfy acc exp act) Map.empty (zip expectedArgs argTypes)
-                                return (applySubst subst ret)
+                                return (applySubstType subst ret)
                     Nothing -> do
                         -- Verifica variáveis locais (Funções de Ordem Superior)
                         case Map.lookup name (vars st) of
@@ -299,19 +321,9 @@ checkExpr (EPre _ e) = checkExpr e
 
 -- Unificação básica e Substituição
 satisfy :: Map String Type -> Type -> Type -> CheckM (Map String Type)
-satisfy s (TVar v) t = case Map.lookup v s of
-    Just t' -> if t == t' then return s else throwError $ "Inconsistência genérica para " ++ v
-    Nothing -> return $ Map.insert v t s
-satisfy s (TArray t1) (TArray t2) = satisfy s t1 t2
-satisfy s (TFunc args1 ret1) (TFunc args2 ret2) = do
-    if length args1 /= length args2 then throwError "HOF: Aridade diferente"
-    else do
-        s' <- foldM (\acc (a1, a2) -> satisfy acc a1 a2) s (zip args1 args2)
-        satisfy s' ret1 ret2
-satisfy s t1 t2 = if t1 == t2 then return s else throwError $ "Incompatibilidade: esperado " ++ show t1 ++ ", obtido " ++ show t2
-
-applySubst :: Map String Type -> Type -> Type
-applySubst s (TVar v) = Map.findWithDefault (TVar v) v s
-applySubst s (TArray t) = TArray (applySubst s t)
-applySubst s (TFunc args ret) = TFunc (map (applySubst s) args) (applySubst s ret)
-applySubst _ t = t
+satisfy s t1 t2 = do
+    let t1' = applySubstType s t1
+    let t2' = applySubstType s t2
+    s' <- runInferInCheckM (unify t1' t2')
+    let composed = composeSubst s' s
+    return composed
