@@ -224,7 +224,7 @@ pLambda = do
     params <- pLambdaParams
     ret    <- optional (symDoubleColon *> pType)
     _      <- symArrow
-    body <- (symLBrace *> many pStmt <* symRBrace) <|> fmap (\e -> [SExpr e]) pExpr
+    body <- (symLBrace *> many pStmt <* symRBrace) <|> fmap (\e -> [SReturn e]) pExpr
     return (Func name gens params ret body)
 
 pLambdaParams :: Parser [(String,String)]

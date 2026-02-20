@@ -67,6 +67,11 @@ collectDef (DefFunc (Func name _ params _ body)) = do
 collectDef (DefStruct (Struct name fields)) = do
     let fieldNames = map fst fields
     modify $ \s -> s { structs = Map.insert name fieldNames (structs s) }
+collectDef (DefGlobalLet (GlobalLet name _ mE)) = do
+    val <- case mE of
+             Just e -> evalExpr e
+             Nothing -> return VNull
+    modify $ \s -> s { globals = Map.insert name val (globals s) }
 
 -- Execução de blocos e comandos
 execBlock :: [Stmt] -> InterpM Value

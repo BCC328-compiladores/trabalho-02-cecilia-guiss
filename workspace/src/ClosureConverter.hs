@@ -48,9 +48,23 @@ convertDef (DefGlobalLet l) = do
 -- | Converte uma função
 convertFunc :: Set String -> Func -> CCM Func
 convertFunc bound f = do
-    let localBound = Set.union bound (Set.fromList $ map fst (fParams f))
-    newBody <- mapM (convertStmt localBound) (fBody f)
+    let localParams = Set.fromList $ map fst (fParams f)
+    -- O 'bound' para o corpo começa com o bound externo + parâmetros locais
+    -- No entanto, para análise de captura de lambdas internos EXATAMENTE NESSE NÍVEL,
+    -- precisamos saber o que foi definido aqui.
+    newBody <- convertBlock (Set.union bound localParams) (fBody f)
     return f { fBody = newBody }
+
+-- | Converte um bloco de comandos, propagando variáveis definidas em 'let'
+convertBlock :: Set String -> [Stmt] -> CCM [Stmt]
+convertBlock _ [] = return []
+convertBlock bound (s:ss) = do
+    newS <- convertStmt bound s
+    let newBound = case s of
+                     SLet name _ _ -> Set.insert name bound
+                     _ -> bound
+    newSS <- convertBlock newBound ss
+    return (newS : newSS)
 
 -- | Converte um comando
 convertStmt :: Set String -> Stmt -> CCM Stmt
@@ -59,22 +73,18 @@ convertStmt bound stmt = case stmt of
         newE <- case mE of
                   Just e -> Just <$> convertExpr bound e
                   Nothing -> return Nothing
-        -- Adicionamos o nome da variável ao bound para os próximos stmts? 
-        -- Em um bloco, variáveis posteriores podem usar as anteriores.
-        -- No entanto, convertStmt opera em um único stmt. O mapM em convertFunc não propaga o bound.
-        -- Mas convertExpr já recebe o bound atual.
         return $ SLet name t newE
     SReturn e -> SReturn <$> convertExpr bound e
-    SIf c t e -> SIf <$> convertExpr bound c <*> mapM (convertStmt bound) t <*> mapM (mapM (convertStmt bound)) e
-    SWhile c b -> SWhile <$> convertExpr bound c <*> mapM (convertStmt bound) b
-    SFor i c inc b -> SFor <$> mapM (convertStmt bound) i <*> convertExpr bound c <*> mapM (convertExpr bound) inc <*> mapM (convertStmt bound) b
+    SIf c t e -> SIf <$> convertExpr bound c <*> convertBlock bound t <*> mapM (convertBlock bound) e
+    SWhile c b -> SWhile <$> convertExpr bound c <*> convertBlock bound b
+    SFor i c inc b -> SFor <$> mapM (convertStmt bound) i <*> convertExpr bound c <*> mapM (convertExpr bound) inc <*> convertBlock bound b
     SExpr e -> SExpr <$> convertExpr bound e
     SDef (DefFunc f) -> do
         lambda <- convertExpr bound (ELambda f)
         return $ SLet (fName f) (Just "func_ptr") (Just lambda)
     SDef d -> return (SDef d)
 
--- | Converte uma expressão
+-- | Converte uma expressão (Aqui acontece a mágica)
 convertExpr :: Set String -> Expr -> CCM Expr
 convertExpr bound expr = case expr of
     ELambda f -> liftLambda bound f
@@ -84,50 +94,71 @@ convertExpr bound expr = case expr of
     ENew t e -> ENew t <$> convertExpr bound e
     EPost e op -> EPost <$> convertExpr bound e <*> return op
     EPre op e -> EPre op <$> convertExpr bound e
-    EVar v -> return $ EVar v
     _ -> return expr
 
 -- | Transforma uma lambda/função aninhada em uma estrutura de Closure
 liftLambda :: Set String -> Func -> CCM Expr
 liftLambda bound f = do
     st <- get
-    -- Variáveis livres são aquelas que estão no 'bound' (escopos pais) mas NÃO no parâmetro ou globais
     let params = Set.fromList (map fst (fParams f))
-    let allUsed = freeVarsFunc Set.empty f
-    let frees = Set.toList $ Set.filter (\v -> Set.member v bound && not (Set.member v (globalNames st))) allUsed
+    -- Variáveis usadas que NÃO são parâmetros locais
+    let allUsed = freeVarsFunc Set.empty f 
+    -- Variáveis que são livres em relação a 'f' MAS estão no 'bound' (escopos pais)
+    -- E que NÃO são globais (funções de topo ou structs)
+    let frees = Set.toList $ Set.filter (\v -> Set.member v bound && Set.notMember v (globalNames st)) allUsed
     
+    -- 1. Cria nome para a função elevada e a struct do ambiente
     fNameNew <- freshName ("lifted_" ++ fName f)
     envStructName <- freshName "Env"
     
+    -- 2. Cria a struct para o ambiente (capturas)
     let envFields = [(v, "var") | v <- frees] 
     let structDef = DefStruct (Struct envStructName envFields)
     
+    -- 3. Modifica o corpo da função para acessar variáveis via '_env'
     let envParam = ("_env", envStructName)
-    -- Importante: no corpo elevado, as variáveis livres agora vêm de _env.v
-    -- Mas as variáveis locais e parâmetros de f continuam normais.
+    let newParams = envParam : fParams f
     let bodyWithEnv = translateFreeVars frees "_env" (fBody f)
     
-    liftedF <- convertFunc Set.empty (f { fName = fNameNew, fParams = envParam : fParams f, fBody = bodyWithEnv })
+    -- 4. Adiciona a função elevada ao estado (vazia de bound externo pois foi elevada)
+    liftedF <- convertFunc Set.empty (f { fName = fNameNew, fParams = newParams, fBody = bodyWithEnv })
     modify $ \s -> s { liftedDefs = liftedDefs s ++ [structDef, DefFunc liftedF] }
     
+    -- 5. No local original, cria o objeto closure: { f: ptr, env: { v1, v2... } }
     return $ ECall "make_closure" [EVar fNameNew, createEnvObject envStructName frees]
 
--- | Auxiliar: Variáveis usadas em uma função que não são definidas nela
+-- | Auxiliar: Extrai variáveis consumidas em uma função que não são definidas nela
 freeVarsFunc :: Set String -> Func -> Set String
-freeVarsFunc localBound f = 
-    let newBound = Set.union localBound (Set.fromList (map fst (fParams f)))
-    in Set.unions (map (freeVarsStmt newBound) (fBody f))
+freeVarsFunc _ f = 
+    let localParams = Set.fromList (map fst (fParams f))
+    in freeVarsBlock localParams (fBody f)
+
+freeVarsBlock :: Set String -> [Stmt] -> Set String
+freeVarsBlock _ [] = Set.empty
+freeVarsBlock bound (s:ss) = 
+    let usedS = freeVarsStmt bound s
+        newBound = case s of
+                     SLet n _ _ -> Set.insert n bound
+                     _ -> bound
+    in usedS `Set.union` freeVarsBlock newBound ss
 
 freeVarsStmt :: Set String -> Stmt -> Set String
 freeVarsStmt bound stmt = case stmt of
-    SLet n _ mE -> 
-        let used = maybe Set.empty (freeVarsExpr bound) mE
-        in used -- Adicionamos 'n' ao bound para o RESTO do bloco? 
-                -- Sim, mas aqui estamos analisando um stmt isolado.
+    SLet n _ mE -> maybe Set.empty (freeVarsExpr bound) mE
     SReturn e -> freeVarsExpr bound e
     SIf c t e -> Set.unions [freeVarsExpr bound c, Set.unions (map (freeVarsStmt bound) t), maybe Set.empty (Set.unions . map (freeVarsStmt bound)) e]
     SWhile c b -> freeVarsExpr bound c `Set.union` Set.unions (map (freeVarsStmt bound) b)
-    SFor i c inc b -> Set.unions [maybe Set.empty (freeVarsStmt bound) i, freeVarsExpr bound c, maybe Set.empty (freeVarsExpr bound) inc, Set.unions (map (freeVarsStmt bound) b)]
+    SFor mi c minc b -> 
+        let usedMi = maybe Set.empty (freeVarsStmt bound) mi
+            initVars = case mi of
+                         Just (SLet n _ _) -> Set.singleton n
+                         _ -> Set.empty
+            loopBound = Set.union bound initVars
+        in Set.unions [ usedMi
+                      , freeVarsExpr loopBound c
+                      , maybe Set.empty (freeVarsExpr loopBound) minc
+                      , Set.unions (map (freeVarsStmt loopBound) b)
+                      ]
     SExpr e -> freeVarsExpr bound e
     SDef (DefFunc f) -> freeVarsFunc bound f
     _ -> Set.empty
@@ -135,8 +166,15 @@ freeVarsStmt bound stmt = case stmt of
 freeVarsExpr :: Set String -> Expr -> Set String
 freeVarsExpr bound expr = case expr of
     EVar v -> if Set.member v bound then Set.empty else Set.singleton v
-    ECall _ args -> Set.unions (map (freeVarsExpr bound) args)
-    EBin _ e1 e2 -> freeVarsExpr bound e1 `Set.union` freeVarsExpr bound e2
+    ECall n args -> 
+        let usedArgs = Set.unions (map (freeVarsExpr bound) args)
+            -- Se 'n' não estiver no bound local e não for print, ele pode ser uma captura (HOF) ou global
+            usedFunc = if n == "print" || Set.member n bound then Set.empty else Set.singleton n
+        in usedFunc `Set.union` usedArgs
+    EBin op e1 e2 -> 
+        if op == "."
+        then freeVarsExpr bound e1 -- Acesso a campo não conta o campo como variável livre
+        else freeVarsExpr bound e1 `Set.union` freeVarsExpr bound e2
     EArray es -> Set.unions (map (freeVarsExpr bound) es)
     ENew _ e -> freeVarsExpr bound e
     EPost e _ -> freeVarsExpr bound e
@@ -144,34 +182,14 @@ freeVarsExpr bound expr = case expr of
     ELambda f -> freeVarsFunc bound f
     _ -> Set.empty
 
--- | Substituição recursiva em todos os tipos de Stmt e Expr
-substStmt :: [String] -> String -> Stmt -> Stmt
-substStmt frees env stmt = case stmt of
-    SReturn e -> SReturn (substExpr frees env e)
-    SLet n t mE -> SLet n t (fmap (substExpr frees env) mE)
-    SIf c t e -> SIf (substExpr frees env c) (map (substStmt frees env) t) (fmap (map (substStmt frees env)) e)
-    SWhile c b -> SWhile (substExpr frees env c) (map (substStmt frees env) b)
-    SFor i c inc b -> SFor (fmap (substStmt frees env) i) (substExpr frees env c) (fmap (substExpr frees env) inc) (map (substStmt frees env) b)
-    SExpr e -> SExpr (substExpr frees env e)
-    SDef d -> SDef d -- Definições internas já foram tratadas via ELambda
-    _ -> stmt
-
-substExpr :: [String] -> String -> Expr -> Expr
-substExpr frees env expr = case expr of
-    EVar v -> if v `elem` frees 
-              then EBin "." (EVar env) (EVar v)
-              else EVar v
-    ECall n args -> ECall n (map (substExpr frees env) args)
-    EBin op e1 e2 -> EBin op (substExpr frees env e1) (substExpr frees env e2)
-    EArray es -> EArray (map (substExpr frees env) es)
-    ENew t e -> ENew t (substExpr frees env e)
-    EPost e op -> EPost (substExpr frees env e) op
-    EPre op e -> EPre op (substExpr frees env e)
-    ELambda f -> ELambda f -- Lambdas internos serão convertidos na sua própria fase de lifting
-    _ -> expr
-
+-- | Substitui variáveis livres pelo acesso ao campo no struct de ambiente
+-- Nova estratégia: adicionamos 'let v = _env.v' no início do corpo para cada v em frees
 translateFreeVars :: [String] -> String -> [Stmt] -> [Stmt]
-translateFreeVars frees envName body = map (substStmt frees envName) body
+translateFreeVars frees envName body = 
+    let projections = [SLet v Nothing (Just (EBin "." (EVar envName) (EVar v))) | v <- frees]
+    in projections ++ body
+
+substStmt _ _ b = b
 
 createEnvObject :: String -> [String] -> Expr
 createEnvObject structName frees = 

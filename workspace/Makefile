@@ -1,5 +1,4 @@
-# Default files to test
-TESTS ?= test/ex1.sl test/ex2.sl test/ex3.sl test/ex4.sl test/ex5.sl test/ex6.sl test/ex7.sl
+TESTS ?= test/ex1.sl test/ex2.sl test/ex3.sl test/ex4.sl test/ex5.sl test/ex6.sl test/ex7.sl test/ex8.sl test/ex9.sl test/ex10.sl test/ex11.sl test/closure_complex.sl
 
 # Handle extra arguments as files
 ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
@@ -17,11 +16,7 @@ build:
 clean:
 	cabal clean
 
-run:
-	@for f in $(TESTS); do \
-		printf "$(BOLD_BLUE)>> Running interpreter on $$f$(RESET)\n"; \
-		cabal run sl -- --run $$f || exit 1; \
-	done
+
 
 # Colors
 BOLD_BLUE := \033[1;34m
@@ -58,5 +53,13 @@ closure:
 		cabal run sl -- --closure $$f || exit 1; \
 	done
 
-test: lexer parser pretty typecheck closure
+run:
+	@for f in $(TESTS); do \
+		printf "$(BOLD_BLUE)>> Running interpreter on $$f$(RESET)\n"; \
+		cabal run sl -- --run $$f || exit 1; \
+	done
+
+
+
+test: lexer parser pretty typecheck closure run
 	@echo "$(BOLD_GREEN)All tests passed!$(RESET)"
