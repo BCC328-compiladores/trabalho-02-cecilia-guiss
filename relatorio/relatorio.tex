@@ -54,10 +54,12 @@
 \sloppy
 
 \begin{abstract}
-Este relat\'{o}rio descreve a implementa\c{c}\~{a}o do analisador l\'{e}xico e sint\'{a}tico do compilador para a linguagem educativa SL, desenvolvido como trabalho pr\'{a}tico da disciplina. O projeto inclui um lexer baseado em Megaparsec, um parser token-driven implementado com Megaparsec sobre uma sequ\^{e}ncia de tokens (token-stream Parsec), uma AST que agora inclui defini\c{c}\~{o}es de \texttt{struct} e fun\c{c}\~{o}es, e uma interface de linha de comando para testar o analisador.
+Este relatório descreve a implementação da segunda etapa do compilador SL: análise semântica (verificação de escopo e checagem de tipos inicial) e o interpretador de semântica dinâmica Big-Step.
 \end{abstract}
 
 	
+
+
 
 \section{Introdu\c{c}\~{a}o}
 
@@ -65,72 +67,96 @@ A linguagem SL \'{e} uma linguagem pequena usada para exerc\'{i}cios de compilad
 
 O projeto foi desenvolvido em Haskell usando a biblioteca Megaparsec para o lexer e uma implementa\c{c}\~{a}o manual de parser que consome tokens produzidos pelo lexer.
 
-\section{Metodologia}
-O desenvolvimento seguiu um ciclo iterativo, orientado a testes e checagem de código. O fluxo típico foi:
+\section{Metodologia, Divis\~{a}o de Tarefas e Uso de LLMs}
+O desenvolvimento seguiu um ciclo iterativo, orientado a testes e checagem de c\'{o}digo.
+Nesta se\c{c}\~{a}o detalhamos a metodologia empregada, a divis\~{a}o de tarefas entre os membros e a utiliza\c{c}\~{a}o de ferramentas baseadas em Large Language Models (LLMs) como aux\'{i}lio ao longo de todas as etapas do trabalho.
+
+\subsection{Divis\~{a}o de Tarefas}
+O trabalho foi desenvolvido em dupla, com a seguinte divis\~{a}o principal de escopo para todas as entregas:
 \begin{itemize}
-    \item implementar incrementos pequenos no \texttt{lexer} e validar a lista de tokens contra casos de teste em \texttt{test/} (alvo \texttt{make lexer} ou \texttt{./sl --lexer});
-    \item implementar o \texttt{parser} sobre o token-stream produzido pelo lexer e inspecionar a AST usando a impressão em árvore (alvo \texttt{make parser} ou \texttt{./sl --parser});
-    \item quando a AST estava coerente, avançar para a checagem semântica (alvo \texttt{make typecheck} ou \texttt{./sl --typecheck}) e, por fim, validar a saída do pretty-printer (\texttt{make pretty} / \texttt{./sl --pretty}).
+    \item \textbf{Cec\'{i}lia Peret}: Ficou respons\'{a}vel pela An\'{a}lise Sint\'{a}tica (implementa\c{c}\~{a}o do parser em Megaparsec), o \texttt{TypeChecker} (checagem de tipos, algoritmo de restri\c{c}\~{o}es, unifica\c{c}\~{a}o de vari\'{a}veis de tipos frescas e verifica\c{c}\~{a}o formal de escopo) e a infer\^{e}ncia de tipos na terceira entrega
+    \item \textbf{Guilherme Silva}: Ficou respons\'{a}vel pela  a An\'{a}lise L\'{e}xica (lexer), o \texttt{Interpretador} (sem\^{a}ntica din\^{a}mica e pilha de escopos), testes gerais, scripts auxiliares de execu\c{c}\~{a}o CLI e integra\c{c}\~{a}o de High Order Functions no código já feito e Closure Conversion.
 \end{itemize}
 
-Para depuração e inspeção foram criados módulos auxiliares:
+\subsection{Uso de LLMs e Prompts}
+Durante diversas etapas do trabalho, recorremos ao aux\'{i}lio de LLMs para tarefas espec\'{i}ficas. O professor determinou que os usos deveriam ser detalhados:
+
+\textbf{Consultas para produzir implementa\c{c}\~{o}es e templates:}
 \begin{itemize}
-    \item \texttt{Pretty.hs}: responsável pela formatação (pretty printing) que reconstrói uma versão legível do código a partir da AST;
-    \item \texttt{ASTtoTree.hs}: converte a AST para uma estrutura \texttt{Data.Tree} e imprime uma representação hierárquica (árvore) que facilita verificar a derivação sintática.
+    \item Criar o c\'{o}digo de impress\~{a}o formatada da \'{a}rvore: Solicitamos ao LLM \textit{''Gere um c\'{o}digo em Haskell que pegue essa matriz de construtores AST e a converta para a estrutura Data.Tree do Haskell, para permitir exibi\c{c}\~{a}o formatada no terminal''}. O resultado originou o arquivo \texttt{ASTtoTree.hs}.
+    \item Impress\~{a}o can\^{o}nica de c\'{o}digo: Pedimos \textit{''Escreva um m\'{o}dulo pretty-printer em Haskell que receba a AST de SL e converta de volta numa string de c\'{o}digo identada''}. Isso originou a base do \texttt{Pretty.hs}.
+    \item \textbf{Resolu\c{c}\~{a}o de Ambiente de Checagem}: T\'{i}nhamos o problema de achar vari\'{a}veis fora do escopo ou descartadas erroneamente ao sair do bloco. Fizemos a consulta: \textit{''Como resolver o problema de vari\'{a}veis de escopo que n\~{a}o s\~{a}o descartadas/restauradas corretamente ao sair de um if/while no verificador de tipos (State Monad)?''} O LLM sugeriu separar o ambiente, armazenando o \texttt{context} como uma pilha de pares \texttt{(vars, currentVars)}. Essa ideia foi diretamente aplicada em \texttt{TypeChecker.hs} e resolveu os erros de shadowing de forma eficiente.
 \end{itemize}
 
-O componente de checagem semântica (\texttt{TypeChecker.hs}) foi desenvolvido após o parser. A abordagem foi dividir a checagem em duas fases:
-\begin{enumerate}
-    \item \textbf{Coleta de assinaturas} (\texttt{collectSignatures}): percorre definições top-level para popular \texttt{funcs} e \texttt{structs}, permitindo que chamadas recursivas e HOFs sejam resolvidas apenas com suas assinaturas;
-    \item \textbf{Verificação dos corpos} (\texttt{checkDef}, \texttt{checkStmt}, \texttt{checkExpr}): percorre a AST e valida tipos e escopos usando um ambiente mutável \texttt{Env} combinado com o monad stack \texttt{CheckM = ExceptT String (State Env)} para acumular estado e reportar erros legíveis.
-\end{enumerate}
-
-Esse fluxo iterativo (lexer → parser → typechecker) e o uso de alvos Make/flags da CLI garantiram ciclos de feedback curtos, facilitando a identificação e correção rápida de regressões.
-
-\subsection{Contribui\c{c}\~{o}es e dificuldades}
-
-Este trabalho foi desenvolvido em dupla, com as seguintes responsabilidades:
+\textbf{Consultas para resolver d\'{u}vidas e bugs espec\'{i}ficos:}
 \begin{itemize}
-    \item \textbf{Cecília Peret}: Análise sintática (parser) e implementa\c{c}\~{a}o do \texttt{TypeChecker} (checagem de tipos e verificação de escopo).
-    \item \textbf{Guilherme Silva}: Análise léxica (lexer) e implementações auxiliares / interpretadores.
+    \item Resolu\c{c}\~{a}o de conflitos de bibliotecas do Haskell: deparemo-nos com conflitos de vers\~{a}o entre \texttt{megaparsec} e \texttt{mtl}. O LLM nos auxiliou orientando na configura\c{c}\~{a}o do arquivo Cabal e no isolamento de depend\^{e}ncias.
+    \item Constru\c{c}\~{a}o do \texttt{Makefile}: \textit{''Crie um Makefile que tenha regras isoladas para lexer, parser, typecheck e pretty usando cabal run''}. A sa\'{i}da forneceu os alvos usados durante todo o fluxo do trabalho.
+\end{itemize}
+O LLM n\~{a}o foi usado diretamente projetar o Parser ou a Infer\^{e}ncia de tipos n\'{u}cleo, mas atuou como um acelerador e como aux\'{i}lio em bugs complexos de estado mon\'{a}dico ou o problema de captura de variáveis declaradas fora do escopo atual.
+
+% ==================== ENTREGA 1 ====================
+
+\section{Primeira Entrega: An\'{a}lise L\'{e}xica e Sint\'{a}tica}
+\subsection{O que foi feito}
+\textbf{Feito:} Na primeira entrega, foi implementado completamente o gerador l\'{e}xico (Lexer) que reconhece os tokens de SL, e a an\'{a}lise sint\'{a}tica (Parser) gerando a \'{A}rvore de Sintaxe Abstrata (AST). Tamb\'{e}m foi implementada a impress\~{a}o formatada e em \'{a}rvore (\texttt{ASTtoTree.hs}).
+\\
+
+\subsection{Sistema de tokens e an\'{a}lise l\'{e}xica}
+
+O lexer est\'{a} em \texttt{workspace/src/Lexer.hs}. Ele usa Megaparsec e produz tokens definidos em \texttt{workspace/src/SLToken.hs}. Cada token carrega a posi\c{c}\~{a}o de origem (\texttt{SourcePos}), o que facilita mensagens de erro informativas.
+
+Principais pontos do lexer:
+\begin{itemize}
+    \item reconhece palavras reservadas: \texttt{func}, \texttt{let}, \texttt{return}, \texttt{if}, \texttt{else}, \texttt{while}, \texttt{for}, \texttt{struct}, \texttt{new}, \texttt{forall}, \texttt{void} e tipos primitivos;
+    \item reconhece operadores compostos (por exemplo, \texttt{++}, \texttt{->}, \texttt{==}, \texttt{!=}, \texttt{\&\&}, \texttt{||});
+    \item produz tokens para pontua\c{c}\~{a}o: par\^{e}nteses, colchetes, chaves, dois-pontos, ponto, v\'{i}rgula e ponto-e-v\'{i}rgula;
+    \item preserva coment\'{a}rios (s\~{a}o ignorados) e posicionamento no arquivo para cada token.
 \end{itemize}
 
-Dificuldade enfrentada (Cecília): a principal dificuldade encontrada durante a implementação do verificador de tipos foi inicialmente projetar o campo \texttt{context} do ambiente de checagem sem representá-lo como um par \texttt{(vars, currentVars)}. No desenho inicial o contexto não preservava separadamente as variáveis do escopo atual e as variáveis visíveis dos escopos externos, o que causou problemas na restauração correta do estado ao sair de um escopo (por exemplo, ao sair de um bloco o sombreamento — shadowing — não era revertido corretamente) e tornou a deteção de redeclaração local mais complexa.
+Arquivo relevante: \texttt{workspace/src/SLToken.hs} cont\'{e}m a enumera\c{c}\~{a}o \texttt{SLToken} com todos os construtores usados pelo parser.
 
-Adotar a representação \texttt{context :: [(Map String Type, Map String Type)]} (uma pilha de pares \texttt{(vars, currentVars)}) resolveu esses problemas ao:
+Detalhes da implementa\c{c}\~{a}o do lexer
 \begin{itemize}
-    \item permitir empurrar uma cópia do par atual ao entrar em um novo escopo e restaurá-la exatamente ao sair (simplificando \texttt{enterScope}/\texttt{exitScope});
-    \item facilitar a implementação de \texttt{defineVar} (inserindo somente em \texttt{currentVars} e em \texttt{vars}), de forma que a deteção de redeclaração local é direta e a visibilidade global permanece consistente;
-    \item tornar mais simples a lógica de restauração do ambiente ao lidar com retornos ou saídas antecipadas (por exemplo, dentro de \texttt{if/else} e loops).
+    \item A fun\c{c}\~{a}o principal \'{e} \texttt{lexTokens :: String -> String -> Either (ParseErrorBundle String Void) [SLToken]} definida em \texttt{workspace/src/Lexer.hs}. Ela recebe o conte\'{u}do do arquivo e o nome do arquivo e retorna a lista de tokens ou um \texttt{ParseErrorBundle} do Megaparsec.
+    \item O scanner de espa\c{c}os e coment\'{a}rios usa o combinador \texttt{L.space} com \texttt{space1}, \texttt{L.skipLineComment ''//''} e \texttt{L.skipBlockComment ''/*'' ''*/''} para ignorar espa\c{c}os e coment\'{a}rios antes de cada token (fun\c{c}\~{a}o \texttt{sc}).
+    \item A ordem de escolha dos tokens em \texttt{pToken} \'{e} importante: primeiro palavras-chave, depois booleanos, n\'{u}meros (float antes de int), strings, s\'{i}mbolos, operadores e finalmente identificadores --- isso evita conflitos (por exemplo, a palavra-chave ''func'' n\~{a}o \'{e} reconhecida como identificador).
+    \item Para cada token existe um parser dedicado: \texttt{pKeyword}, \texttt{pBool}, \texttt{pNumber} (com \texttt{pFloat} e \texttt{pInt}), \texttt{pString}, \texttt{pSymbol}, \texttt{pOperator} e \texttt{pIdent}. Cada parser captura a posi\c{c}\~{a}o atual com \texttt{getSourcePos} e constr\'{o}i o \texttt{SLToken} correspondente (por exemplo \texttt{TkIntLit n pos}).
+    \item O parser de operadores reconhece sequ\^{e}ncias compostas (por exemplo \texttt{''->''}, \texttt{''\&\&''}, \texttt{''||''}, \texttt{''<=''}, \texttt{''==''}, \texttt{''++''}, \texttt{''--''}) antes de operadores simples, para garantir que o token mais longo seja escolhido.
+    \item O parser possui uma tabela de operadores aritm\'{e}ticos e bin\'{a}rios com ordem de preced\^{e}ncia, evitando ambiguidade em operaç\~{o}es
 \end{itemize}
 
-Essa decisão de projeto foi documentada e justificada na seção dedicada ao ambiente do verificador de tipos (mais adiante), e ajudou a reduzir bugs relacionados a escopos durante a validação com os testes em \texttt{test/}.
+\subsection{An\'{a}lise sint\'{a}tica (parser)}
 
-Durante a implementação mantivemos um processo orientado a testes unitários e inspeção manual: pequenas alterações eram seguidas de execuções dos alvos do \texttt{Makefile} (\texttt{make lexer}, \texttt{make parser}, \texttt{make typecheck}, \texttt{make pretty}) e inspeção da saída (lista de tokens, árvore AST, resultado do typechecker, e saída pretty). Esse ciclo curto de feedback ajudou a localizar regressões cedo e a garantir que cada etapa (lexer, parser, typechecker) permanecesse consistente com as demais.
+O parser principal est\'{a} em \texttt{workspace/src/Parser.hs}. Em vez de construir um parser combinat\'{o}rio sobre o texto, optou-se por um parser ''token-driven'': o lexer produz \texttt{[SLToken]} e o parser consome essa lista com uma m\'{a}quina simples.
 
-As decis\~{o}es principais foram:
+Arquitetura do parser:
 \begin{itemize}
-    \item \textbf{Escolha do Megaparsec:} Optou-se pelo uso do Megaparsec em detrimento de ferramentas tradicionais como Alex e Happy. O Megaparsec permite escrever analisadores l\'{e}xicos e sint\'{a}ticos de forma unificada e mais idiom\'{a}tica em Haskell (combinadores mon\'{a}dicos), oferecendo melhor integra\c{c}\~{a}o com a linguagem e mensagens de erro superiores, sem a necessidade de geradores de c\'{o}digo externos.
-    \item usar Megaparsec tanto no lexer quanto no parser: o lexer usa Megaparsec para tokenizar e preservar \texttt{SourcePos} em cada token, e o parser agora opera sobre um token-stream (\texttt{Parsec} sobre \texttt{[SLToken]}) usando primitivas de Megaparsec para corresponder tokens;
-    \item manter a AST simples e evoluir conforme os testes --- a AST foi expandida para incluir \texttt{Definition} e \texttt{Struct}, al\'{e}m de suporte a literais de struct, arrays, \texttt{new}, chamadas e la\c{c}os.
+    \item tipo de parser: o parser agora \'{e} um \texttt{Parsec} que consome um stream de \texttt{[SLToken]} (ou seja, \texttt{type Parser = Parsec Void [SLToken]}). Em vez de manipular o estado de tokens manualmente, usamos as primitivas de Megaparsec para token streams com fun\c{c}\~{o}es auxiliares;
+    \item utilit\'{a}rios: \texttt{matchTok} (extrai valores de tokens via um \texttt{SLToken -> Maybe a}) e \texttt{satisfyTok} (testa predicados \texttt{SLToken -> Bool}) encapsulam a chamada a \texttt{token} do Megaparsec e simplificam o reconhecimento de palavras-chave, s\'{i}mbolos e literais;
+    \item itens de topo: o parser aceita tanto defini\c{c}\~{o}es de \texttt{struct} quanto de \texttt{func} (representadas no c\'{o}digo como \texttt{Definition} com constructors \texttt{DefStruct} e \texttt{DefFunc}); structs s\~{a}o consumidos e armazenados na AST (n\~{a}o mais descartados), mais tarde foi implementada a presença de vari\'{a}veis globais;
+    \item express\~{o}es: implementado usando \texttt{makeExprParser} (tabela de operadores) para preced\^{e}ncia, com \texttt{pPostfix} para indexa\c{c}\~{a}o, acesso a campo, chamadas e literais de struct no formato \texttt{Ident\{...\}}; postfix ++/-- tamb\'{e}m s\~{a}o suportados;
+    \item instru\c{c}\~{o}es: \texttt{let} (com inicializador e tipo opcionais), \texttt{return}, \texttt{if/else}, \texttt{while} e \texttt{for} (com inicializador, condi\c{c}\~{a}o e incremento analisados);
+    \item tipos: \texttt{pType} aceita tipos primitivos, identificadores de tipo e sufixos de array como \texttt{[]}/\texttt{[n]}, al\'{e}m de uma forma simples de tipo fun\c{c}\~{a}o \texttt{(a) -> b} representada como string.
 \end{itemize}
 
-\section{Linguagem: estrutura sint\'{a}tica de SL}
-
-O analisador implementado cobre um subconjunto expressivo da linguagem SL, com as seguintes constru\c{c}\~{o}es (exemplos):
+O parser produz uma AST definida em \texttt{Parser.hs} com os construtores principais:
 \begin{itemize}
-    \item literais: inteiros, floats, strings, booleanos;
-    \item identificadores e chamadas de fun\c{c}\~{a}o: \texttt{f(x, y)};
-    \item arrays e literais de arrays: \texttt{a[i]}, \texttt{[1,2,3]};
-    \item express\~{a}o \texttt{new T[e]} para cria\c{c}\~{a}o de arrays;
-    \item declara\c{c}\~{o}es \texttt{let}, instru\c{c}\~{o}es \texttt{return}, \texttt{if/else}, \texttt{while}, \texttt{for};
-    \item defini\c{c}\~{a}o de fun\c{c}\~{a}o: \texttt{func name(params) : retType \{ ... \}};
-    \item suporte b\'{a}sico a tipos primitivos (\texttt{int}, \texttt{float}, \texttt{string}, \texttt{bool}) e tipos de usu\'{a}rio (identificadores como nomes de tipo) com sufixos de array (\texttt{T[]}, \texttt{T[n]}).
+    \item \texttt{Definition}: \texttt{DefFunc Func} ou \texttt{DefStruct Struct} --- o topo do arquivo pode conter ambas defini\c{c}\~{o}es;
+    \item \texttt{Struct}: nome e lista de campos (pares nome/tipo);
+    \item \texttt{Expr}: \texttt{EInt}, \texttt{EFloat}, \texttt{EString}, \texttt{EVar}, \texttt{ECall} (usado tamb\'{e}m para literais de struct no formato atual), \texttt{EArray}, \texttt{ENew}, \texttt{EBin}, \texttt{EPost};
+    \item \texttt{Stmt}: \texttt{SReturn}, \texttt{SLet}, \texttt{SIf}, \texttt{SWhile}, \texttt{SFor}, \texttt{SExpr}.
 \end{itemize}
 
-\section{Gram\'{a}tica Formal}
+\subsection{\'{A}rvore de sintaxe abstrata}
 
-A gram\'{a}tica implementada, descrita em nota\c{c}\~{a}o de Gramática Livre de Contexto (GLC), \'{e} apresentada abaixo.
+A AST \'{e} mantida simples e orientada \`{a}s necessidades imediatas do parser. Ela \'{e} suficiente para representar programas de teste e permite futuras fases de checagem de tipos e gera\c{c}\~{a}o de c\'{o}digo.
+
+Exemplo de n\'{o}: uma atribui\c{c}\~{a}o via \'{i}ndice, como \texttt{result[i] = f(v[i]);}, \'{e} representada usando n\'{o}s de indexa\c{c}\~{a}o (no parser implementado como um \texttt{EBin ''[]''}) e atribui\c{c}\~{a}o como um \texttt{EBin ''=''} com o lado esquerdo e direito apropriados.
+
+\subsection{Gram\'{a}tica Formal}
+Abaixo a representa\c{c}\~{a}o formal da gram\'{a}tica da linguagem SL suportada de forma completa pelo parser, incluindo lambdas an\^{o}nimas e senten\c{c}as \texttt{let} em escopo global.
+A gram\'{a}tica implementada, descrita em nota\c{c}\~{a}o de Gram\'{a}tica Livre de Contexto (GLC), \'{e} apresentada abaixo.
 
 \begin{lstlisting}[basicstyle=\ttfamily\scriptsize]
 Program -> TopLevels
@@ -140,6 +166,8 @@ TopLevels -> TopLevel TopLevels
 
 TopLevel -> StructDef
           | FuncDef
+          | GlobalLet
+          
 
 StructDef -> struct id { StructFields }
 
@@ -182,7 +210,7 @@ ArraySuffix -> []
 
 BaseType -> FuncType
           | PrimitiveType
-          | id
+          | id\n      | \ LambdaFunc
 
 PrimitiveType -> int | float | string | bool | void
 
@@ -227,6 +255,14 @@ Expr -> PrefixExpr ExprTail
 ExprTail -> BinOp PrefixExpr ExprTail
           | lambda
 
+GlobalLet -> let id TypeOpt InitOpt ;
+
+LambdaFunc -> \ ParamsLambdaOpt TypeRetOpt -> { Stmts }
+            | \ ParamsLambdaOpt TypeRetOpt -> Expr
+          
+ParamsLambdaOpt -> ( Params )
+                 | Param
+
 PrefixExpr -> ++ PrefixExpr
             | -- PrefixExpr
             | ! PrefixExpr
@@ -238,7 +274,7 @@ Term -> int_lit
       | new BaseType [ Expr ]
       | [ ExprListOpt ]
       | ( Expr )
-      | id
+      | id\n      | \ LambdaFunc
       | Term Postfix
 
 ExprListOpt -> Expr ExprListTail
@@ -256,522 +292,148 @@ Postfix -> [ Expr ]
 BinOp -> + | - | * | / | < | > | <= | >= | == | != | && | || | =
 \end{lstlisting}
 
-\section{Sistema de tokens e an\'{a}lise l\'{e}xica}
 
-O lexer est\'{a} em \texttt{workspace/src/Lexer.hs}. Ele usa Megaparsec e produz tokens definidos em \texttt{workspace/src/SLToken.hs}. Cada token carrega a posi\c{c}\~{a}o de origem (\texttt{SourcePos}), o que facilita mensagens de erro informativas.
 
-Principais pontos do lexer:
-\begin{itemize}
-    \item reconhece palavras reservadas: \texttt{func}, \texttt{let}, \texttt{return}, \texttt{if}, \texttt{else}, \texttt{while}, \texttt{for}, \texttt{struct}, \texttt{new}, \texttt{forall}, \texttt{void} e tipos primitivos;
-    \item reconhece operadores compostos (por exemplo, \texttt{++}, \texttt{->}, \texttt{==}, \texttt{!=}, \texttt{\&\&}, \texttt{||});
-    \item produz tokens para pontua\c{c}\~{a}o: par\^{e}nteses, colchetes, chaves, dois-pontos, ponto, v\'{i}rgula e ponto-e-v\'{i}rgula;
-    \item preserva coment\'{a}rios (s\~{a}o ignorados) e posicionamento no arquivo para cada token.
-\end{itemize}
+% ==================== ENTREGA 2 ====================
 
-Arquivo relevante: \texttt{workspace/src/SLToken.hs} cont\'{e}m a enumera\c{c}\~{a}o \texttt{SLToken} com todos os construtores usados pelo parser.
+% \subsection{Prompts e Comandos Utilizados}
+% \subsubsection{Lexer}
+% Comando usado (Makefile):
+% \begin{lstlisting}
+% make lexer TESTS=test/ex3.sl
+% # ou via execut\'{a}vel
+% ./sl --lexer test/ex3.sl
+% \end{lstlisting}
 
-Detalhes da implementa\c{c}\~{a}o do lexer
-\begin{itemize}
-    \item A fun\c{c}\~{a}o principal \'{e} \texttt{lexTokens :: String -> String -> Either (ParseErrorBundle String Void) [SLToken]} definida em \texttt{workspace/src/Lexer.hs}. Ela recebe o conte\'{u}do do arquivo e o nome do arquivo e retorna a lista de tokens ou um \texttt{ParseErrorBundle} do Megaparsec.
-    \item O scanner de espa\c{c}os e coment\'{a}rios usa o combinador \texttt{L.space} com \texttt{space1}, \texttt{L.skipLineComment "//"} e \texttt{L.skipBlockComment "/*" "*/"} para ignorar espa\c{c}os e coment\'{a}rios antes de cada token (fun\c{c}\~{a}o \texttt{sc}).
-    \item A ordem de escolha dos tokens em \texttt{pToken} \'{e} importante: primeiro palavras-chave, depois booleanos, n\'{u}meros (float antes de int), strings, s\'{i}mbolos, operadores e finalmente identificadores --- isso evita conflitos (por exemplo, a palavra-chave "func" n\~{a}o \'{e} reconhecida como identificador).
-    \item Para cada token existe um parser dedicado: \texttt{pKeyword}, \texttt{pBool}, \texttt{pNumber} (com \texttt{pFloat} e \texttt{pInt}), \texttt{pString}, \texttt{pSymbol}, \texttt{pOperator} e \texttt{pIdent}. Cada parser captura a posi\c{c}\~{a}o atual com \texttt{getSourcePos} e constr\'{o}i o \texttt{SLToken} correspondente (por exemplo \texttt{TkIntLit n pos}).
-    \item O parser de operadores reconhece sequ\^{e}ncias compostas (por exemplo \texttt{"->"}, \texttt{"\&\&"}, \texttt{"||"}, \texttt{"<="}, \texttt{"=="}, \texttt{"++"}, \texttt{"--"}) antes de operadores simples, para garantir que o token mais longo seja escolhido.
-\end{itemize}
+% Como foi usado: essa sa\'{i}da foi essencial para verificar que o lexer reconhece palavras-chave, literais, identificadores e operadores corretamente, e que cada token preserva a posi\c{c}\~{a}o (\texttt{SourcePos}). Problemas observados (por exemplo, tokens compostos n\~{a}o sendo reconhecidos como um s\'{o}) foram corrigidos ajustando a ordem de tentativa em \texttt{pToken} (colocando operadores compostos antes de operadores simples).
 
-\section{An\'{a}lise sint\'{a}tica (parser)}
+% \subsubsection{Parser}
+% Comando usado (Makefile):
+% \begin{lstlisting}
+% make parser TESTS=test/ex1.sl
+% # ou
+% ./sl --parser test/ex1.sl
+% \end{lstlisting}
 
-O parser principal est\'{a} em \texttt{workspace/src/Parser.hs}. Em vez de construir um parser combinat\'{o}rio sobre o texto, optou-se por um parser "token-driven": o lexer produz \texttt{[SLToken]} e o parser consome essa lista com uma m\'{a}quina simples.
+% Como foi usado: a impress\~{a}o em forma de \'{a}rvore (gerada por \texttt{ASTtoTree.hs}) permitiu validar a correspond\^{e}ncia entre regras gramaticais e construtores AST. Sempre que um trecho de c\'{o}digo de teste era parseado incorretamente (por exemplo, tratamento de chamadas de struct vs chamadas de fun\c{c}\~{a}o), a \'{a}rvore mostrava exatamente qual construtor foi escolhido, guiando corre\c{c}\~{o}es no \texttt{Parser.hs} (p.ex. ordem de alternativas, parser de postfix e associatividade de operadores).
 
-Arquitetura do parser:
-\begin{itemize}
-    \item tipo de parser: o parser agora \'{e} um \texttt{Parsec} que consome um stream de \texttt{[SLToken]} (ou seja, \texttt{type Parser = Parsec Void [SLToken]}). Em vez de manipular o estado de tokens manualmente, usamos as primitivas de Megaparsec para token streams com fun\c{c}\~{o}es auxiliares;
-    \item utilit\'{a}rios: \texttt{matchTok} (extrai valores de tokens via um \texttt{SLToken -> Maybe a}) e \texttt{satisfyTok} (testa predicados \texttt{SLToken -> Bool}) encapsulam a chamada a \texttt{token} do Megaparsec e simplificam o reconhecimento de palavras-chave, s\'{i}mbolos e literais;
-    \item itens de topo: o parser aceita tanto defini\c{c}\~{o}es de \texttt{struct} quanto de \texttt{func} (representadas no c\'{o}digo como \texttt{Definition} com constructors \texttt{DefStruct} e \texttt{DefFunc}); structs s\~{a}o consumidos e armazenados na AST (n\~{a}o mais descartados);
-    \item express\~{o}es: implementado usando \texttt{makeExprParser} (tabela de operadores) para preced\^{e}ncia, com \texttt{pPostfix} para indexa\c{c}\~{a}o, acesso a campo, chamadas e literais de struct no formato \texttt{Ident\{...\}}; postfix ++/-- tamb\'{e}m s\~{a}o suportados;
-    \item instru\c{c}\~{o}es: \texttt{let} (com inicializador e tipo opcionais), \texttt{return}, \texttt{if/else}, \texttt{while} e \texttt{for} (com inicializador, condi\c{c}\~{a}o e incremento analisados);
-    \item tipos: \texttt{pType} aceita tipos primitivos, identificadores de tipo e sufixos de array como \texttt{[]}/\texttt{[n]}, al\'{e}m de uma forma simples de tipo fun\c{c}\~{a}o \texttt{(a) -> b} representada como string.
-\end{itemize}
+\section{Segunda Entrega: An\'{a}lise Sem\^{a}ntica (sem infer\^{e}ncia) e Interpretador}
+\subsection{O que foi feito}
+\textbf{Feito:} Implementa\c{c}\~{a}o da an\'{a}lise de escopo est\'{a}tico via monad State e Except, detec\c{c}\~{a}o de vari\'{a}veis n\~{a}o declaradas, sombreamento e valida\c{c}\~{a}o de compatibilidade exata de primitivos (sem convers\~{a}o impl\'{i}cita). Implementou-se tamb\'{e}m o Interpretador que roda a sem\^{a}ntica de fato, iterando sobre a AST para avalia\c{c}\~{a}o das express\~{o}es (\texttt{Interpreter.hs}) e Closure Conversion.
+\\
 
-O parser produz uma AST definida em \texttt{Parser.hs} com os construtores principais:
-\begin{itemize}
-    \item \texttt{Definition}: \texttt{DefFunc Func} ou \texttt{DefStruct Struct} --- o topo do arquivo pode conter ambas defini\c{c}\~{o}es;
-    \item \texttt{Struct}: nome e lista de campos (pares nome/tipo);
-    \item \texttt{Expr}: \texttt{EInt}, \texttt{EFloat}, \texttt{EString}, \texttt{EVar}, \texttt{ECall} (usado tamb\'{e}m para literais de struct no formato atual), \texttt{EArray}, \texttt{ENew}, \texttt{EBin}, \texttt{EPost};
-    \item \texttt{Stmt}: \texttt{SReturn}, \texttt{SLet}, \texttt{SIf}, \texttt{SWhile}, \texttt{SFor}, \texttt{SExpr}.
-\end{itemize}
-
-\section{\'{A}rvore de sintaxe abstrata}
-
-A AST \'{e} mantida simples e orientada \`{a}s necessidades imediatas do parser. Ela \'{e} suficiente para representar programas de teste e permite futuras fases de checagem de tipos e gera\c{c}\~{a}o de c\'{o}digo.
-
-Exemplo de n\'{o}: uma atribui\c{c}\~{a}o via \'{i}ndice, como \texttt{result[i] = f(v[i]);}, \'{e} representada usando n\'{o}s de indexa\c{c}\~{a}o (no parser implementado como um \texttt{EBin "[]"}) e atribui\c{c}\~{a}o como um \texttt{EBin "="} com o lado esquerdo e direito apropriados.
-
-\subsection{Sa\'{i}da do parser e organiza\c{c}\~{a}o da \'{a}rvore de an\'alise sint\'atica}
-
-Durante o desenvolvimento foi implementada uma rotina de impressão em formato de árvore (utilizada pelo utilitário CLI e pelo módulo \texttt{ASTtoTree.hs}) que produz uma representação legível da AST. A seguir incluímos a saída obtida ao executar o alvo \texttt{make parser} sobre os arquivos de teste (saída gerada no container de desenvolvimento):
-
-\begin{lstlisting}
->> Running parser on test/ex1.sl
-Program
-|
-+- Func: factorial (n:int) -> int
-|  |
-|  `- Body
-|     |
-|     `- If
-|        |
-|        +- BinOp: <=
-|        |  |
-|        |  +- Var: n
-|        |  |
-|        |  `- Int: 1
-|        |
-|        +- Then
-|        |  |
-|        |  `- Return
-|        |     |
-|        |     `- Int: 1
-|        |
-|        `- Else
-|           |
-|           `- Return
-|              |
-|              `- BinOp: *
-|                 |
-|                 +- Var: n
-|                 |
-|                 `- Call: factorial
-|                    |
-|                    `- BinOp: -
-|                       |
-|                       +- Var: n
-|                       |
-|                       `- Int: 1
-|
-`- Func: main () -> int
-   |
-   `- Body
-      |
-      +- Let result: int
-      |  |
-      |  `- Call: factorial
-      |     |
-      |     `- Int: 5
-      |
-      +- StmtExpr
-      |  |
-      |  `- Call: print
-      |     |
-      |     `- Var: result
-      |
-      `- Return
-         |
-         `- Int: 0
-
-... (saída completa para ex2..ex7 omitida aqui por brevidade; a versão completa foi incluída no arquivo de desenvolvimento) ...
-\end{lstlisting}
-
-Explicação da organização:
-\begin{itemize}
-    \item Raiz \texttt{Program}: contém uma lista de definições de topo (	exttt{Definition}) — funções (\texttt{Func}) e structs (\texttt{Struct}).
-    \item \texttt{Func: name (params) -> ret}: representa uma definição de função com assinatura explicitada; o filho \texttt{Body} contém os statements do corpo.
-    \item Nós de statements: são impressos com rótulos como \texttt{Let}, \texttt{Return}, \texttt{If}, \texttt{While}, \texttt{For}, \texttt{StmtExpr} (expressões usadas como instruções). Cada um contém os filhos relevantes (por exemplo, \texttt{Let} tem o identificador, tipo opcional e expressão de inicialização; \texttt{If} tem condição, \texttt{Then} e \texttt{Else}).
-    \item Nós de expressão: incluem \texttt{Var}, \texttt{Int}, \texttt{Float}, \texttt{String}, \texttt{Call}, \texttt{BinOp: OP}, \texttt{Postfix}, \texttt{Prefix}, \texttt{ArrayLit}, \texttt{New}, etc. Para chamadas, a impressão expõe o nome da função e seus argumentos como subnós; para \texttt{BinOp} o operador é impresso e os operandos aparecem abaixo.
-    \item Indexação e acesso a campo: na representação atual a indexação aparece como um \texttt{BinOp: []} (lado esquerdo: expressão que indexa, lado direito: índice) e acesso a campo como \texttt{BinOp: .} (lado esquerdo: expressão que contém o campo, lado direito: nome do campo), o que facilita a visualização uniforme de operações binárias pós-fixadas.
-    \item Formato textual: a impressão usa caracteres tipo \texttt{|}, \texttt{+-} e \texttt{`-} para representar ramos e níveis da árvore, seguindo o estilo clássico de impressões de árvores (gerado por uma combinação de \texttt{Data.Tree} e uma função auxiliar de pretty-print em \texttt{ASTtoTree.hs}). Isso melhora a inspeção manual dos testes e facilita localizar erros de parsing: cada token consumido e cada construtor AST têm uma linha dedicada.
-\end{itemize}
-
-Mapeamento para o código:
-\begin{itemize}
-    \item Os rótulos exibidos correspondem diretamente aos construtores definidos em \texttt{Parser.hs} (por exemplo, \texttt{DefFunc}, \texttt{DefStruct}, \texttt{EVar}, \texttt{ECall}, \texttt{EBin}, \texttt{SReturn}, \texttt{SLet}, etc.).
-    \item A função que transforma a AST em uma \texttt{Data.Tree} e imprime o resultado encontra-se em \texttt{ASTtoTree.hs}; ela faz o \'{m}apeamento de cada construtor AST para um rótulo textual e uma lista de filhos apropriada.
-    \item Essa saída é usada no alvo \texttt{make parser} para validar visualmente que a árvore produzida pelo parser corresponde à estrutura sintática esperada para cada teste.
-\end{itemize}
-
-Utilidade prática:
-\begin{itemize}
-    \item Depuração: facilita localizar onde o parser tomou uma decisão (por exemplo, se um operador foi tratado como unário vs binário, ou se uma chamada foi interpretada como literal de struct);
-    \item Testes: nos testes automatizados manualmente inspecionamos esta saída para garantir que construções complexas (arrays, structs, generics, overloads de operadores) gerem a AST esperada;
-    \item Integração: a estrutura impressa é próxima à representação que o \texttt{TypeChecker} e o gerador de código irão consumir, então a correspondência visual acelera o desenvolvimento das fases seguintes.
-\end{itemize}
-
-\section{An\'{a}lise sem\^{a}ntica e gera\c{c}\~{a}o de c\'{o}digo}
-
+\subsection{An\'{a}lise Sem\^{a}ntica e Verifica\c{c}\~{a}o de Escopo}
 Estas fases n\~{a}o foram implementadas integralmente no escopo atual. O projeto fornece a base (tokens + AST) necess\'{a}ria para implementar:
 \begin{itemize}
     \item checagem est\'{a}tica de tipos e infer\^{e}ncia;
     \item resolu\c{c}\~{a}o de nomes e verifica\c{c}\~{a}o de escopo;
-    \item gera\c{c}\~{a}o de c\'{o}digo intermedi\'{a}rio (por exemplo, uma IR simples) ou tradu\c{c}\~{a}o para C/WebAssembly.
+    \item Interpretador para a execuç\~{a}o do compilador.
 \end{itemize}
 
-\section{Modo de uso}
-
-O projeto inclui um execut\'{a}vel chamado \texttt{sl} que pode ser executado via Cabal no diret\'{o}rio \texttt{workspace}. Exemplos de uso:
-
-\begin{lstlisting}
-cd workspace
-make build        # executa 'cabal build' via Makefile
-make lexer        # roda o lexer sobre os arquivos em TESTS (ou passe arquivos como argumentos)
-make parser       # roda o parser sobre os arquivos em TESTS
-make pretty       # executa a saida 'pretty' (formatacao) sobre os arquivos em TESTS
-make test         # executa lexer, parser e pretty em sequencia
-
-# Exemplos de uso com arquivos especificos:
-# make lexer TESTS=test/ex6.sl
-# make parser TESTS=test/ex6.sl
-\end{lstlisting}
-
-O reposit\'{o}rio tamb\'{e}m inclui um \texttt{docker-compose} para facilitar execu\c{c}\~{a}o em um container conforme instru\c{c}\~{o}es no \texttt{README.md} do projeto.
- 
-\subsection{Prompts, comandos e resultados}
-
-Durante o desenvolvimento usamos um conjunto consistente de prompts/comandos (alvos do \texttt{Makefile} e flags do executável) para depurar, validar e guiar implementações. A seguir documentamos os comandos principais, exemplos de saída e como cada resultado foi usado no trabalho.
-
-\subsubsection{Lexer}
-Comando usado (Makefile):
-\begin{lstlisting}
-make lexer TESTS=test/ex3.sl
-# ou via executável
-./sl --lexer test/ex3.sl
-\end{lstlisting}
-
-Exemplo de saída (tokens resumidos):
-\begin{lstlisting}
-TkKeyword(func) TkIdent(reverse) TkLParen TkIdent(arr) TkColon TkIdent(int) ...
-TkIntLit 5 TkRBrace TkEOF
-\end{lstlisting}
-
-Como foi usado: essa saída foi essencial para verificar que o lexer reconhece palavras-chave, literais, identificadores e operadores corretamente, e que cada token preserva a posição (\texttt{SourcePos}). Problemas observados (por exemplo, tokens compostos não sendo reconhecidos como um só) foram corrigidos ajustando a ordem de tentativa em \texttt{pToken} (colocando operadores compostos antes de operadores simples).
-
-\subsubsection{Parser}
-Comando usado (Makefile):
-\begin{lstlisting}
-make parser TESTS=test/ex1.sl
-# ou
-./sl --parser test/ex1.sl
-\end{lstlisting}
-
-Exemplo de saída (árvore):
-\begin{lstlisting}
-Program
-|
-+- Func: factorial (n:int) -> int
-|  `- Body
-|     `- If
-|        +- BinOp: <=
-|        `- Return
-\end{lstlisting}
-
-\begin{lstlisting}
-Program
-|
-+- Func: factorial (n:int) -> int
-|  |
-|  `- Body
-|     |
-|     `- If
-|        |
-|        +- BinOp: <=
-|        |  |
-|        |  +- Var: n
-|        |  |
-|        |  `- Int: 1
-|        |
-|        +- Then
-|        |  |
-|        |  `- Return
-|        |     |
-|        |     `- Int: 1
-|        |
-|        `- Else
-|           |
-|           `- Return
-|              |
-|              `- BinOp: *
-|                 |
-|                 +- Var: n
-|                 |
-|                 `- Call: factorial
-|                    |
-|                    `- BinOp: -
-|                       |
-|                       +- Var: n
-|                       |
-|                       `- Int: 1
-|
-`- Func: main () -> int
-    |
-    `- Body
-        |
-        +- Let result: int
-        |  |
-        |  `- Call: factorial
-        |     |
-        |     `- Int: 5
-        |
-        +- StmtExpr
-        |  |
-        |  `- Call: print
-        |     |
-        |     `- Var: result
-        |
-        `- Return
-            |
-            `- Int: 0
-\end{lstlisting}
-
-Como foi usado: a impressão em forma de árvore (gerada por \texttt{ASTtoTree.hs}) permitiu validar a correspondência entre regras gramaticais e construtores AST. Sempre que um trecho de código de teste era parseado incorretamente (por exemplo, tratamento de chamadas de struct vs chamadas de função), a árvore mostrava exatamente qual construtor foi escolhido, guiando correções no \texttt{Parser.hs} (p.ex. ordem de alternativas, parser de postfix e associatividade de operadores).
-
-\subsubsection{TypeChecker}
-Comando usado (Makefile):
-\begin{lstlisting}
-make typecheck TESTS=test/ex5.sl
-# ou
-./sl --typecheck test/ex5.sl
-\end{lstlisting}
-
-Exemplo de saída (erro / sucesso):
-\begin{lstlisting}
-Type error at test/ex5.sl:12:5: expected void, found int
--- ou --
-Typecheck OK
-\end{lstlisting}
-
-Como foi usado: o output do typechecker foi usado tanto para afinar as regras de tipos (p.ex. verificar compatibilidade entre arrays e indexação) quanto para localizar erros nos arquivos de teste (por exemplo, o caso onde uma função retornava \texttt{int} mas a assinatura esperava \texttt{void} — corrigido em \texttt{test/ex5.sl}). As mensagens de erro foram gradualmente melhoradas para incluir posição e descrição clara, facilitando correções rápidas.
-
-\subsubsection{Pretty / Pretty-printer}
-Comando usado (Makefile):
-\begin{lstlisting}
-make pretty TESTS=test/ex4.sl
-# ou
-./sl --pretty test/ex4.sl
-\end{lstlisting}
-
-Exemplo de saída:
-\begin{lstlisting}
-func calculateBMI(weight: float, height: float) : float {
-    return weight / (height * height);
-}
-\end{lstlisting}
-
-\begin{lstlisting}
-func calculateBMI (weight : float, height : float) : float {
-    return weight / height * height;
-}
-func isAdult (age : int) : bool {
-    return age >= 18;
-}
-func main () : void {
-    let bmi: float  = calculateBMI(70.5, 1.75);
-    let adult: bool  = isAdult(20);
-    print(bmi);
-    print(adult);
-    if (adult && bmi > 25.0) {
-        print("Adulto com sobrepeso");
-    } else {
-        print("Condição normal");
-    }
-}
-\end{lstlisting}
-
-Como foi usado: o pretty-printer foi utilizado para verificar que a AST tem informação suficiente para reconstruir uma forma legível do código-fonte (útil em debugging e para inspeção visual após transformações). Também serviu como verificação auxiliar após alterações no parser — se a saída pretty era razoável, a AST provavelmente estava correta.
-
-\subsubsection{Uso combinado e exemplos de fluxo}
-Um fluxo típico de desenvolvimento seguido repetidamente:
-\begin{enumerate}
-    \item Rodar \texttt{make lexer} para validar tokens e posições.
-    \item Rodar \texttt{make parser} e inspecionar a árvore para confirmar a derivação sintática.
-    \item Se a árvore estiver correta, rodar \texttt{make typecheck} para validar regras semânticas; caso haja erro, ajustar \texttt{TypeChecker.hs} ou o teste.
-    \item Rodar \texttt{make pretty} para confirmar que a AST pode ser revertida para uma forma canónica legível.
-\end{enumerate}
-
-\subsubsection{Consultas e dúvidas específicas}
-Além das execuções locais, documentamos consultas específicas (perguntas técnicas e decisões) que guiaram implementações — por exemplo:
-\begin{itemize}
-    \item "Como representar escopos e sombreamento no ambiente?" — motivou a escolha \texttt{context :: [(Map, Map)]} e a implementação de \texttt{enterScope}/\texttt{exitScope}.
-    \item "Como imprimir a AST para fácil inspeção?" — levou à implementação de \texttt{ASTtoTree.hs} e a função que converte construtores AST em \texttt{Data.Tree} para pretty-print.
-    \item "Como tratar genéricos na checagem de tipos?" — levou a adicionar \texttt{satisfy} e \texttt{applySubst} para unificação simples e aplicação de substituições em assinaturas de função.
-\end{itemize}
-
-Essas questões foram respondidas iterativamente combinando logs das execuções (acima) com inspeção do código e ajustes até que as saídas dos comandos refletissem o comportamento esperado.
-\section{Testes realizados}
-
-Foram utilizados arquivos de exemplo (por exemplo \texttt{test/ex2.sl}, \texttt{test/ex3.sl}, \texttt{test/ex6.sl}) para validar o lexer e o parser. Durante o desenvolvimento foram corrigidos problemas como:
-\begin{itemize}
-    \item tokens com posi\c{c}\~{a}o (SourcePos) que exigiram padr\~{o}es de correspond\^{e}ncia com campos extras;
-    \item parsing de acesso a campos (ponto) e indexa\c{c}\~{a}o dentro de express\~{o}es de tamanho (por exemplo, \texttt{new b[v.size]});
-    \item suporte a declara\c{c}\~{o}es de \texttt{struct} de topo e literais de struct no formato \texttt{Type\{v1, v2, ...\}} (por exemplo, \texttt{Person{"Alice", 25, 1.65}});
-    \item aceita\c{c}\~{a}o de tipos de par\^{a}metro opcionais e inicializadores opcionais em \texttt{let};
-    \item suporte a literais de array e \`{a} express\~{a}o \texttt{new T[e]}.
-    \item Foram criados 6 arquivos de teste cobrindo diversas constru\c{c}\~{o}es da linguagem SL. Todos est\~{a}o localizados na pasta test
-\end{itemize}
-
-\subsection{Lista de testes (pasta \texttt{test/})}
-
-O repositório inclui vários arquivos de teste localizados em \texttt{test/}. Abaixo listamos os ficheiros presentes e descrevemos, de forma concisa e ligada ao código do verificador, por que cada teste é considerado correto (isto é, por que o \emph{typechecker} os aceita).
-
-Arquivos de teste incluídos:
-\begin{itemize}
-    \item \texttt{test/ex1.sl}
-    \item \texttt{test/ex2.sl}
-    \item \texttt{test/ex3.sl}
-    \item \texttt{test/ex4.sl}
-    \item \texttt{test/ex5.sl}  % função identidade (mostrada abaixo)
-    \item \texttt{test/ex6.sl}
-    \item \texttt{test/ex7.sl}
-    \item \texttt{test/ex8.sl}
-    \item \texttt{test/fail_scope.sl} % teste com falha de escopo
-\end{itemize}
-
-Como o verificador opera (resumo do mecanismo usado para aceitar os testes):
-\begin{enumerate}
-    \item Antes de checar corpos de funções, o programa chama \texttt{collectSignatures} para preencher \texttt{funcs} e \texttt{structs} com assinaturas e definições top-level. Isso permite que chamadas recursivas e referências a structs sejam validadas apenas com sua assinatura (veja a função \texttt{collectSignatures} em \texttt{TypeChecker.hs}).
-    \item Para cada definição (função/struct) o verificador chama \texttt{checkDef} que: seta o \texttt{retType}, entra em escopo com \texttt{enterScope}, registra parâmetros com \texttt{defineVar} e verifica o corpo com \texttt{checkStmt} (que por sua vez usa \texttt{checkExpr}).
-    \item A resolução de identificadores usa \texttt{lookupVar} (procura em \texttt{vars}) e também consulta \texttt{funcs} caso o nome corresponda a uma função. \texttt{defineVar} garante deteção de redeclaração no mesmo escopo ao inserir em \texttt{currentVars} e \texttt{vars}.
-    \item Verificações de compatibilidade de tipos são centralizadas em \texttt{expectType} (compara dois \texttt{Type} e emite erro se divergirem). Para funções genéricas, a checagem utiliza \texttt{satisfy} para construir uma substituição de variáveis de tipo e \texttt{applySubst} para aplicar essa substituição ao tipo de retorno esperado.
-    \item Regras específicas (indexação, acesso a campos, operadores aritméticos/ lógicos, etc.) são tratadas em \texttt{checkExpr} e reportam mensagens de erro claras quando a forma/ tipos não batem.
-\end{enumerate}
-
-Exemplo concreto: \texttt{test/ex5.sl}
-\begin{lstlisting}
-// Exemplo 5: função identidade
-func id(x : int) : int {
-    return x;
-}
-
-func main() : void {
-    let value : int = 5;
-    let identity = id(value);
-    print(identity);
-}
-\end{lstlisting}
-
-Por que \texttt{ex5.sl} passou no \texttt{typechecker}:
-\begin{itemize}
-    \item \texttt{collectSignatures} registra a assinatura de \texttt{id} como \texttt{([], [int], int)} em \texttt{funcs} (sem genéricos neste caso).
-    \item Ao checar a chamada \texttt{id(value)} o verificador avalia o argumento \texttt{value} e obtém \texttt{int} (via \texttt{checkExpr} e \texttt{lookupVar}).
-    \item \texttt{checkExpr} para chamada encontra a assinatura em \texttt{funcs} e compara os tipos esperados dos argumentos com os tipos efetivamente passados; aqui \texttt{expectType} confirma que ambos são \texttt{int}.
-    \item O tipo de retorno de \texttt{id} (\texttt{int}) é então usado como tipo de \texttt{identity} (por \texttt{applySubst} no caso genérico; aqui não há substituições) e \texttt{print} aceita valores sem tipo de retorno (\texttt{print} é tratada especialmente e retorna \texttt{void}).
-\end{itemize}
-
-Teste de falha de escopo: \texttt{test/failscope.sl}
-\begin{itemize}
-    \item Este arquivo (intencionalmente) tenta acessar/usar uma variável fora do seu escopo. O verificador detecta isso em \texttt{lookupVar} (que não encontra a entrada em \texttt{vars} e não há assinatura de função correspondente em \texttt{funcs}) e lança um erro "Variável não está no escopo". Essa falha valida a corretude da implementação de \texttt{enterScope}/\texttt{exitScope} e do mecanismo de restauração do \texttt{context}.
-\end{itemize}
-
-Resumo: os testes foram desenhados para cobrir os principais aspectos do front-end: tokenização/lexer, parse, estrutura de AST, regras de tipos (incluindo arrays, structs, chamadas, e genéricos simples) e verificação de escopo. O verificador implementado usa \texttt{ExpectT String (State Env)} para combinar mensagens de erro legíveis com um ambiente mutável acessível por todas as rotinas de checagem; funções centrais como \texttt{expectType}, \texttt{satisfy}, \texttt{applySubst}, \texttt{lookupVar} e \texttt{defineVar} são responsáveis por garantir que os programas de teste estejam semanticamente corretos.
-
-
-\section{An\'{a}lise Sem\^{a}ntica (Etapa 2)}
-
-A segunda etapa do trabalho focou na implementa\c{c}\~{a}o da an\'{a}lise sem\^{a}ntica e verifica\c{c}\~{a}o de tipos. O m\'{o}dulo \texttt{TypeChecker.hs} foi criado para realizar as seguintes valida\c{c}\~{o}es:
-
-Breve nota sobre a abordagem adotada na análise semântica: a checagem foi projetada em duas fases principais — (1) uma fase de coleta de assinaturas (\texttt{collectSignatures}) que percorre as definições de topo para popular \texttt{funcs} e \texttt{structs}, e (2) uma fase de verificação dos corpos (\texttt{checkDef}/\texttt{checkStmt}/\texttt{checkExpr}) que utiliza o ambiente \texttt{Env} e um \texttt{CheckM = ExceptT String (State Env)} para acumular estado e erros. Essa separação permite validar chamadas recursivas e detectar incompatibilidades de tipos de forma mais estruturada.
+Breve nota sobre a abordagem adotada na an\'{a}lise sem\^{a}ntica: a checagem foi projetada em duas fases principais --- (1) uma fase de coleta de assinaturas (\texttt{collectSignatures}) que percorre as defini\c{c}\~{o}es de topo para popular \texttt{funcs} e \texttt{structs}, e (2) uma fase de verifica\c{c}\~{a}o dos corpos (\texttt{checkDef}/\texttt{checkStmt}/\texttt{checkExpr}) que utiliza o ambiente \texttt{Env} e um \texttt{CheckM = ExceptT String (State Env)} para acumular estado e erros. Essa separa\c{c}\~{a}o permite validar chamadas recursivas e detectar incompatibilidades de tipos de forma mais estruturada.
 
 \begin{itemize}
     \item \textbf{Verifica\c{c}\~{a}o de Tipos:} Valida\c{c}\~{a}o de tipos primitivos (\texttt{int, float, bool, string, void}) e tipos complexos (arrays, structs). O sistema de tipos \'{e} estrito, impedindo opera\c{c}\~{o}es entre tipos num\'{e}ricos diferentes (ex: \texttt{int + float}) para garantir seguran\c{c}a e clareza.
     \item \textbf{Verifica\c{c}\~{a}o de Escopo (Declara\c{c}\~{a}o \'{U}nica):} Implementa\c{c}\~{a}o de uma tabela de s\'{i}mbolos baseada em pilha (\texttt{Env}). Garante que um identificador n\~{a}o seja redeclarado no mesmo escopo, permitindo o sombreamento (\textit{shadowing}) de vari\'{a}veis em escopos internos.
     \item \textbf{An\'{a}lise de Fun\c{c}\~{o}es:} Valida\c{c}\~{a}o de chamadas de fun\c{c}\~{a}o (aridade e tipos de argumentos), al\'{e}m de suporte a fun\c{c}\~{o}es de ordem superior (HOF).
     \item \textbf{Acesso a Dados:} Verifica\c{c}\~{a}o de acesso a campos de \texttt{struct} e indexa\c{c}\~{a}o de arrays, garantindo que o alvo possua o campo ou suporte indexa\c{c}\~{a}o.
-    \item \textbf{Infer\^{e}ncia Local e Gen\'{e}ricos:} O compilador infere tipos em declara\c{c}\~{o}es \texttt{let} e loops \texttt{for}, al\'{e}m de suportar unifica\c{c}\~{a}o b\'{a}sica para fun\c{c}\~{o}es gen\'{e}ricas (\texttt{forall}).
 \end{itemize}
 
 O verificador de tipos percorre a AST e reporta erros sem\^{a}nticos detalhados.
 
 \subsection{Ambiente do verificador de tipos}
 
-O verificador de tipos utiliza um ambiente (registro Haskell chamado \texttt{Env}) que centraliza o estado necessário durante a checagem. A definição usada no código \texttt{workspace/src/TypeChecker.hs} é a seguinte:
+O verificador de tipos utiliza um ambiente (registro Haskell chamado \texttt{Env}) que centraliza o estado necess\'{a}rio durante a checagem. A defini\c{c}\~{a}o usada no c\'{o}digo \texttt{workspace/src/TypeChecker.hs} \'{e} a seguinte:
 
 \begin{lstlisting}[language=Haskell]
 data Env = Env
-    { vars    :: Map String Type                 -- Todas as variáveis visíveis (incluindo escopos pais)
-    , currentVars :: Map String Type             -- Variáveis declaradas APENAS no escopo atual
-    , funcs   :: Map String ([String], [Type], Type)  -- (Genéricos, Argumentos, Retorno)
+    { vars    :: Map String Type                 -- Todas as vari\'{a}veis vis\'{i}veis (incluindo escopos pais)
+    , currentVars :: Map String Type             -- Vari\'{a}veis declaradas APENAS no escopo atual
+    , funcs   :: Map String ([String], [Type], Type)  -- (Gen\'{e}ricos, Argumentos, Retorno)
     , structs :: Map String (Map String Type)    
     , context :: [(Map String Type, Map String Type)] -- Pilha de (vars, currentVars)
     , retType :: Maybe Type                      
-    , activeGens :: [String]                     -- Genéricos da função atual
+    , activeGens :: [String]                     -- Gen\'{e}ricos da fun\c{c}\~{a}o atual
     }
 \end{lstlisting}
 
-A escolha desta organização foi motivada por simplicidade e eficiência durante a travessia da AST. Abaixo explicamos cada campo e a razão de projeto:
+A escolha desta organiza\c{c}\~{a}o foi motivada por simplicidade e efici\^{e}ncia durante a travessia da AST. Abaixo explicamos cada campo e a raz\~{a}o de projeto:
 
 \begin{itemize}
-    \item \textbf{\texttt{vars :: Map String Type}} -- armazena todas as variáveis visíveis no ponto atual da checagem, incluindo as vindas de escopos pais. Usar \texttt{Map} permite buscas O(log n) e código claro ao consultar tipos de identificadores.
-    \item \textbf{\texttt{currentVars :: Map String Type}} -- mantém apenas as variáveis declaradas no escopo corrente. Isso facilita detectar redeclarações no mesmo bloco (erro semântico) sem precisar comparar estruturas maiores de escopo.
-    \item \textbf{\texttt{funcs :: Map String ([String], [Type], Type)}} -- tabela de assinaturas de funções: lista de genéricos (nomes), tipos dos argumentos e tipo de retorno. As assinaturas são coletadas antes de verificar corpos (fase \emph{collectSignatures}), o que permite chamadas recursivas e checagem de HOFs.
-    \item \textbf{\texttt{structs :: Map String (Map String Type)}} -- mapeia nomes de \texttt{struct} para suas tabelas de campos (nome \textrightarrow tipo). Isso é usado para validar acessos a campos e construir tipos de literais/construtores de struct.
-    \item \textbf{\texttt{context :: [(Map String Type, Map String Type)]}} -- pilha usada para implementar entrada/saída de escopos: ao entrar num bloco empilhamos o par (\texttt{vars},\texttt{currentVars}) e, ao sair, restauramos o par anterior. Essa estratégia simplifica rollback de alterações locais.
-    \item \textbf{\texttt{retType :: Maybe Type}} -- guarda o tipo de retorno esperado da função corrente (se houver). Permite validar instruções \texttt{return} dentro do corpo da função.
-    \item \textbf{\texttt{activeGens :: [String]}} -- lista de genéricos ativos no escopo da função corrente. É usada para interpretar strings de tipo que podem referir variáveis de tipo genérico (por exemplo, \texttt{forall a.}).
+    \item \textbf{\texttt{vars :: Map String Type}} -- armazena todas as vari\'{a}veis vis\'{i}veis no ponto atual da checagem, incluindo as vindas de escopos pais. Usar \texttt{Map} permite buscas O(log n) e c\'{o}digo claro ao consultar tipos de identificadores.
+    \item \textbf{\texttt{currentVars :: Map String Type}} -- mant\'{e}m apenas as vari\'{a}veis declaradas no escopo corrente. Isso facilita detectar redeclara\c{c}\~{o}es no mesmo bloco (erro sem\^{a}ntico) sem precisar comparar estruturas maiores de escopo.
+    \item \textbf{\texttt{funcs :: Map String ([String], [Type], Type)}} -- tabela de assinaturas de fun\c{c}\~{o}es: lista de gen\'{e}ricos (nomes), tipos dos argumentos e tipo de retorno. As assinaturas s\~{a}o coletadas antes de verificar corpos (fase \emph{collectSignatures}), o que permite chamadas recursivas e checagem de HOFs.
+    \item \textbf{\texttt{structs :: Map String (Map String Type)}} -- mapeia nomes de \texttt{struct} para suas tabelas de campos (nome \textrightarrow tipo). Isso \'{e} usado para validar acessos a campos e construir tipos de literais/construtores de struct.
+    \item \textbf{\texttt{context :: [(Map String Type, Map String Type)]}} -- pilha usada para implementar entrada/sa\'{i}da de escopos: ao entrar num bloco empilhamos o par (\texttt{vars},\texttt{currentVars}) e, ao sair, restauramos o par anterior. Essa estrat\'{e}gia simplifica rollback de altera\c{c}\~{o}es locais.
+    \item \textbf{\texttt{retType :: Maybe Type}} -- guarda o tipo de retorno esperado da fun\c{c}\~{a}o corrente (se houver). Permite validar instru\c{c}\~{o}es \texttt{return} dentro do corpo da fun\c{c}\~{a}o.
+    \item \textbf{\texttt{activeGens :: [String]}} -- lista de gen\'{e}ricos ativos no escopo da fun\c{c}\~{a}o corrente. \'{E} usada para interpretar strings de tipo que podem referir vari\'{a}veis de tipo gen\'{e}rico (por exemplo, \texttt{forall a.}).
 \end{itemize}
 
 
-Uma parte central deste ambiente que merece uma explicação mais detalhada é o campo \texttt{context} (a pilha de pares \texttt{(vars,currentVars)}), pois ele governa o comportamento de escopos, sombreamento e restauração de estado durante a travessia da AST.
+Uma parte central deste ambiente que merece uma explica\c{c}\~{a}o mais detalhada \'{e} o campo \texttt{context} (a pilha de pares \texttt{(vars,currentVars)}), pois ele governa o comportamento de escopos, sombreamento e restaura\c{c}\~{a}o de estado durante a travessia da AST.
 
 \paragraph{Por que armazenar \texttt{context} como um par?}
-Armazenar o par \texttt{(vars,currentVars)} em cada nível da pilha tem três vantagens práticas no design deste verificador:
+Armazenar o par \texttt{(vars,currentVars)} em cada n\'{i}vel da pilha tem tr\^{e}s vantagens pr\'{a}ticas no design deste verificador:
 \begin{enumerate}
-    \item \textbf{Restauração O(1)}: ao sair de um escopo basta desempilhar o par e repor \texttt{vars} e \texttt{currentVars} exatamente como estavam — não é preciso iterar sobre chaves ou reconstruir mapas. Empurrar e desempilhar são operações O(1) na lista que usamos como pilha.
-    \item \textbf{Detecção fácil de redeclaração local}: como mantemos \texttt{currentVars} separado, checar "variável já declarada neste escopo" é apenas uma busca em \texttt{currentVars} (O(log n) na implementação com \texttt{Map}). Não precisamos fazer buscas complexas nem comparar com o mapa pai.
-    \item \textbf{Semântica de shadowing explícita}: quando uma variável local sombreia um nome de escopo pai, atualizamos \texttt{vars} com o novo mapeamento e guardamos o mapa antigo no par. Ao restaurar, o nome sombreado retorna ao seu estado anterior automaticamente.
+    \item \textbf{Restaura\c{c}\~{a}o O(1)}: ao sair de um escopo basta desempilhar o par e repor \texttt{vars} e \texttt{currentVars} exatamente como estavam --- n\~{a}o \'{e} preciso iterar sobre chaves ou reconstruir mapas. Empurrar e desempilhar s\~{a}o opera\c{c}\~{o}es O(1) na lista que usamos como pilha.
+    \item \textbf{Detec\c{c}\~{a}o f\'{a}cil de redeclara\c{c}\~{a}o local}: como mantemos \texttt{currentVars} separado, checar ''vari\'{a}vel j\'{a} declarada neste escopo'' \'{e} apenas uma busca em \texttt{currentVars} (O(log n) na implementa\c{c}\~{a}o com \texttt{Map}). N\~{a}o precisamos fazer buscas complexas nem comparar com o mapa pai.
+    \item \textbf{Sem\^{a}ntica de shadowing expl\'{i}cita}: quando uma vari\'{a}vel local sombreia um nome de escopo pai, atualizamos \texttt{vars} com o novo mapeamento e guardamos o mapa antigo no par. Ao restaurar, o nome sombreado retorna ao seu estado anterior automaticamente.
 \end{enumerate}
 
-\paragraph{Custo comparado a alternativas}
-Uma alternativa óbvia seria não manter \texttt{vars} global e, em vez disso, procurar um identificador caminhando pela pilha de \texttt{currentVars} do topo até a raiz (modelo de pilha de níveis). Esse modelo tem a vantagem conceitual de ser puramente funcional, mas traz dois custos práticos:
+% \paragraph{Custo comparado a alternativas}
+% Uma alternativa \'{o}bvia seria n\~{a}o manter \texttt{vars} global e, em vez disso, procurar um identificador caminhando pela pilha de \texttt{currentVars} do topo at\'{e} a raiz (modelo de pilha de n\'{i}veis). Esse modelo tem a vantagem conceitual de ser puramente funcional, mas traz dois custos pr\'{a}ticos:
+% \begin{itemize}
+%     \item \begin{minipage}[t]{\linewidth}cada lookup de vari\'{a}vel pode precisar percorrer v\'{a}rios mapas, o que degrada performance em programas aninhados;\end{minipage}
+%     \item \begin{minipage}[t]{\linewidth}ao sair de um escopo, n\~{a}o precisamos restaurar nada explicitamente --- mas acabamos pagando a conta nas buscas.\end{minipage}
+% \end{itemize}
+
+% Outra alternativa seria reconstruir \texttt{vars} ao sair do escopo, removendo explicitamente todas as chaves presentes em \texttt{currentVars}; isso \'{e} funcionalmente correto mas implica custo proporcional ao n\'{u}mero de vari\'{a}veis locais (cada remo\c{c}\~{a}o \'{e} O(log n)).
+
+% Por isso o par \texttt{(vars,currentVars)} \'{e} um compromisso pr\'{a}tico: lookups continuam r\'{a}pidos (uma \'{u}nica busca em \texttt{vars}), declara\c{c}\~{o}es locais s\~{a}o f\'{a}ceis de detectar (checar \texttt{currentVars}) e restaura\c{c}\~{a}o do estado \'{e} direta (desempilhar o par). Para o escopo dos exerc\'{i}cios e exemplos da disciplina, essa escolha \'{e} simples e suficiente.
+
+% \paragraph{Exemplo passo-a-passo}
+% Segue um exemplo ilustrativo simplificado do conte\'{u}do dos mapas durante a entrada/sa\'{i}da de um bloco.
+% \begin{lstlisting}[basicstyle=\ttfamily\small]
+% # Estado inicial
+% vars       = { x : int, y : bool }
+% currentVars= { }
+% context    = [ ]
+
+% # Ao entrar em um bloco (enterScope):
+% context    = [ ({x:int,y:bool}, {}) ]
+% currentVars= {}
+
+% # Declaramos `let x : float = 0.0` dentro do bloco (shadowing):
+% currentVars= { x : float }
+% vars       = { x : float, y : bool }
+
+% # Ao sair do bloco (exitScope):
+% ({oldVars,oldCurrent} : rest) = head context
+% vars       = oldVars       -- { x : int, y : bool }
+% currentVars= oldCurrent    -- { }
+% context    = rest
+% \end{lstlisting}
+
+% Esse exemplo mostra como o shadowing \'{e} tratado sem opera\c{c}\~{o}es complexas ao sair do escopo: a restaura\c{c}\~{a}o \'{e} um simples desempilhamento.
+
+Implementacionalmente, o verificador de tipos roda dentro da monad transformer \texttt{ExceptT String (State Env)} (apelidada \texttt{CheckM}). Essa escolha re\'{u}ne duas necessidades importantes:
+
 \begin{itemize}
-    \item \begin{minipage}[t]{\linewidth}cada lookup de variável pode precisar percorrer vários mapas, o que degrada performance em programas aninhados;\end{minipage}
-    \item \begin{minipage}[t]{\linewidth}ao sair de um escopo, não precisamos restaurar nada explicitamente — mas acabamos pagando a conta nas buscas.\end{minipage}
+    \item tratamento de erros sem\^{a}nticos via \texttt{ExceptT} (mensagens claras e abortamento da checagem ao encontrar inconsist\^{e}ncias),
+    \item manuten\c{c}\~{a}o de estado mut\'{a}vel do ambiente via \texttt{State Env} (entrada/sa\'{i}da de escopos, inser\c{c}\~{a}o de vari\'{a}veis, atualiza\c{c}\~{a}o de tabelas de fun\c{c}\~{o}es/structs) sem passar explicitamente o ambiente em todos os par\^{a}metros.
 \end{itemize}
 
-Outra alternativa seria reconstruir \texttt{vars} ao sair do escopo, removendo explicitamente todas as chaves presentes em \texttt{currentVars}; isso é funcionalmente correto mas implica custo proporcional ao número de variáveis locais (cada remoção é O(log n)).
-
-Por isso o par \texttt{(vars,currentVars)} é um compromisso prático: lookups continuam rápidos (uma única busca em \texttt{vars}), declarações locais são fáceis de detectar (checar \texttt{currentVars}) e restauração do estado é direta (desempilhar o par). Para o escopo dos exercícios e exemplos da disciplina, essa escolha é simples e suficiente.
-
-\paragraph{Exemplo passo-a-passo}
-Segue um exemplo ilustrativo simplificado do conteúdo dos mapas durante a entrada/saída de um bloco.
-\begin{lstlisting}[basicstyle=\ttfamily\small]
-# Estado inicial
-vars       = { x : int, y : bool }
-currentVars= { }
-context    = [ ]
-
-# Ao entrar em um bloco (enterScope):
-context    = [ ({x:int,y:bool}, {}) ]
-currentVars= {}
-
-# Declaramos `let x : float = 0.0` dentro do bloco (shadowing):
-currentVars= { x : float }
-vars       = { x : float, y : bool }
-
-# Ao sair do bloco (exitScope):
-({oldVars,oldCurrent} : rest) = head context
-vars       = oldVars       -- { x : int, y : bool }
-currentVars= oldCurrent    -- { }
-context    = rest
-\end{lstlisting}
-
-Esse exemplo mostra como o shadowing é tratado sem operações complexas ao sair do escopo: a restauração é um simples desempilhamento.
-
-Implementacionalmente, o verificador de tipos roda dentro da monad transformer \texttt{ExceptT String (State Env)} (apelidada \texttt{CheckM}). Essa escolha reúne duas necessidades importantes:
-
+Algumas decis\~{o}es de projeto e trade-offs:
 \begin{itemize}
-    \item tratamento de erros semânticos via \texttt{ExceptT} (mensagens claras e abortamento da checagem ao encontrar inconsistências),
-    \item manutenção de estado mutável do ambiente via \texttt{State Env} (entrada/saída de escopos, inserção de variáveis, atualização de tabelas de funções/structs) sem passar explicitamente o ambiente em todos os parâmetros.
+    \item separar \texttt{currentVars} de \texttt{vars} facilita detectar redeclara\c{c}\~{o}es no mesmo n\'{i}vel e implementar shadowing de forma clara (vari\'{a}veis novas s\~{a}o inseridas em \texttt{currentVars} e em \texttt{vars}).
+    \item guardar as assinaturas de fun\c{c}\~{o}es em \texttt{funcs} antes de verificar corpos permite suporte natural a recurs\~{a}o e checagem modular (checar chamadas usando apenas a assinatura).
+    \item a representa\c{c}\~{a}o de tipos (tipo \texttt{Type}) \'{e} tratada num m\'{o}dulo separado (\texttt{Types.hs}), mantendo o \texttt{Env} independente dos detalhes internos de tipos enquanto o acesso/compare \'{e} simples (\texttt{Eq} e constru\c{c}\~{a}o de tipos compostos como \texttt{TArray} e \texttt{TFunc}).
+    \item o modelo \'{e} intencionalmente simples e suficiente para o subconjunto da linguagem SL abordado; casos mais avan\c{c}ados (infer\^{e}ncia completa, solu\c{c}\~{a}o de restri\c{c}\~{o}es rica) exigiriam uma estrutura de ambiente e mecanismos de unifica\c{c}\~{a}o mais sofisticados.
 \end{itemize}
 
-Algumas decisões de projeto e trade-offs:
-\begin{itemize}
-    \item separar \texttt{currentVars} de \texttt{vars} facilita detectar redeclarações no mesmo nível e implementar shadowing de forma clara (variáveis novas são inseridas em \texttt{currentVars} e em \texttt{vars}).
-    \item guardar as assinaturas de funções em \texttt{funcs} antes de verificar corpos permite suporte natural a recursão e checagem modular (checar chamadas usando apenas a assinatura).
-    \item a representação de tipos (tipo \texttt{Type}) é tratada num módulo separado (\texttt{Types.hs}), mantendo o \texttt{Env} independente dos detalhes internos de tipos enquanto o acesso/compare é simples (\texttt{Eq} e construção de tipos compostos como \texttt{TArray} e \texttt{TFunc}).
-    \item o modelo é intencionalmente simples e suficiente para o subconjunto da linguagem SL abordado; casos mais avançados (inferência completa, solução de restrições rica) exigiriam uma estrutura de ambiente e mecanismos de unificação mais sofisticados.
-\end{itemize}
+No c\'{o}digo, fun\c{c}\~{o}es auxiliares como \texttt{enterScope}, \texttt{exitScope}, \texttt{defineVar} e \texttt{lookupVar} encapsulam as opera\c{c}\~{o}es sobre o \texttt{Env}, mantendo o restante do verificador concentrado nas regras de tipos e reduzindo repeti\c{c}\~{a}o de manipula\c{c}\~{a}o de estado.
 
-No código, funções auxiliares como \texttt{enterScope}, \texttt{exitScope}, \texttt{defineVar} e \texttt{lookupVar} encapsulam as operações sobre o \texttt{Env}, mantendo o restante do verificador concentrado nas regras de tipos e reduzindo repetição de manipulação de estado.
-
-Abaixo estão trechos representativos dessas funções (retirados de \texttt{workspace/src/TypeChecker.hs}) e uma explicação do que fazem e por que são importantes:
+Abaixo est\~{a}o trechos representativos dessas fun\c{c}\~{o}es (retirados de \texttt{workspace/src/TypeChecker.hs}) e uma explica\c{c}\~{a}o do que fazem e por que s\~{a}o importantes:
 
 \begin{lstlisting}[language=Haskell]
 lookupVar :: String -> CheckM Type
@@ -781,13 +443,13 @@ lookupVar name = do
         Just t -> return t
         Nothing -> case Map.lookup name (funcs st) of
             Just (gens, args, ret) -> return (TFunc args ret)
-            Nothing -> throwError $ "Variável não está no escopo: " ++ name
+            Nothing -> throwError $ ''Vari\'{a}vel n\~{a}o est\'{a} no escopo: '' ++ name
 
 defineVar :: String -> Type -> CheckM ()
 defineVar name t = do
     st <- get
     if Map.member name (currentVars st)
-        then throwError $ "Variável já declarada neste escopo: " ++ name
+        then throwError $ ''Vari\'{a}vel j\'{a} declarada neste escopo: '' ++ name
         else put $ st { vars = Map.insert name t (vars st)
                       , currentVars = Map.insert name t (currentVars st) 
                       }
@@ -796,32 +458,69 @@ expectType :: Type -> Type -> CheckM ()
 expectType expected actual = 
     if expected == actual 
     then return () 
-    else throwError $ "Incompatibilidade de tipos: esperado " ++ show expected ++ ", obtido " ++ show actual
+    else throwError $ ''Incompatibilidade de tipos: esperado '' ++ show expected ++ '', obtido '' ++ show actual
 \end{lstlisting}
 
-Explicação e motivação:
+Explica\c{c}\~{a}o e motiva\c{c}\~{a}o:
 \begin{itemize}
-    \item \textbf{\texttt{lookupVar}}: Pesquisa primeiro em \texttt{vars} (mapa que contém todas as variáveis visíveis). Se não encontrar um identificador, tenta \texttt{funcs} — isto permite tratar chamadas a funções nomeadas mesmo quando não há uma entrada específica em \texttt{vars} (as funções têm assinaturas guardadas em \texttt{funcs}). Se tudo falhar, lança um erro indicando que o identificador não está no escopo.
-    \item \textbf{\texttt{defineVar}}: Antes de inserir uma nova variável, verifica \texttt{currentVars} para evitar redeclarações no mesmo escopo (erro semântico). Se a variável não existe no escopo atual, insere a nova entrada em \texttt{currentVars} (para detectar redeclarações futuras neste escopo) e em \texttt{vars} (para que buscas posteriores encontrem o identificador rapidamente). Essa duplicação é intencional e compatível com o uso do par \texttt{(vars,currentVars)} na pilha de \texttt{context}.
-    \item \textbf{\texttt{expectType}}: Função utilitária que compara tipos esperados e obtidos; em caso de discrepância, emite uma mensagem de erro legível com os dois tipos (apoiando a depuração). Centralizar essa checagem evita repetição de código por toda a verificação de expressões e comandos.
+    \item \textbf{\texttt{lookupVar}}: Pesquisa primeiro em \texttt{vars} (mapa que cont\'{e}m todas as vari\'{a}veis vis\'{i}veis). Se n\~{a}o encontrar um identificador, tenta \texttt{funcs} --- isto permite tratar chamadas a fun\c{c}\~{o}es nomeadas mesmo quando n\~{a}o h\'{a} uma entrada espec\'{i}fica em \texttt{vars} (as fun\c{c}\~{o}es t\^{e}m assinaturas guardadas em \texttt{funcs}). Se tudo falhar, lan\c{c}a um erro indicando que o identificador n\~{a}o est\'{a} no escopo.
+    \item \textbf{\texttt{defineVar}}: Antes de inserir uma nova vari\'{a}vel, verifica \texttt{currentVars} para evitar redeclara\c{c}\~{o}es no mesmo escopo (erro sem\^{a}ntico). Se a vari\'{a}vel n\~{a}o existe no escopo atual, insere a nova entrada em \texttt{currentVars} (para detectar redeclara\c{c}\~{o}es futuras neste escopo) e em \texttt{vars} (para que buscas posteriores encontrem o identificador rapidamente). Essa duplica\c{c}\~{a}o \'{e} intencional e compat\'{i}vel com o uso do par \texttt{(vars,currentVars)} na pilha de \texttt{context}.
+    \item \textbf{\texttt{expectType}}: Fun\c{c}\~{a}o utilit\'{a}ria que compara tipos esperados e obtidos; em caso de discrep\^{a}ncia, emite uma mensagem de erro leg\'{i}vel com os dois tipos (apoiando a depura\c{c}\~{a}o). Centralizar essa checagem evita repeti\c{c}\~{a}o de c\'{o}digo por toda a verifica\c{c}\~{a}o de express\~{o}es e comandos.
 \end{itemize}
 
-Essas funções mantêm o verificador simples e modular: \texttt{lookupVar}/\texttt{defineVar} encapsulam a política de escopos e sombreamento; \texttt{expectType} encapsula a lógica de erro ao comparar tipos. Juntas, elas permitem que as regras de checagem (por exemplo, em \texttt{checkExpr} e \texttt{checkStmt}) continuem legíveis e diretas, delegando a infraestrutura de estado/erros ao \texttt{Env} e ao \texttt{CheckM}.
+Essas fun\c{c}\~{o}es mant\^{e}m o verificador simples e modular: \texttt{lookupVar}/\texttt{defineVar} encapsulam a pol\'{i}tica de escopos e sombreamento; \texttt{expectType} encapsula a l\'{o}gica de erro ao comparar tipos. Juntas, elas permitem que as regras de checagem (por exemplo, em \texttt{checkExpr} e \texttt{checkStmt}) continuem leg\'{i}veis e diretas, delegando a infraestrutura de estado/erros ao \texttt{Env} e ao \texttt{CheckM}.
 
-
-\section{Interpretador (Etapa 2)}
+\subsection{Interpretador}
 
 O m\'{o}dulo \texttt{Interpreter.hs} implementa a sem\^{a}ntica operacional da linguagem SL, permitindo a execu\c{c}\~{a}o direta da AST.
 
 \begin{itemize}
     \item \textbf{Ambiente de Execu\c{c}\~{a}o:} Utiliza uma pilha de escopos (\texttt{[Map String Value]}) para gerenciar o estado das vari\'{a}veis, permitindo que altera\c{c}\~{o}es em loops e blocos persistam corretamente.
     \item \textbf{L-Values e Atribui\c{c}\~{a}o:} Suporte a atribui\c{c}\~{o}es complexas (campos de structs e \'{i}ndices de arrays).
-    \item \textbf{Recurs\~{a}o:} Suporte total a chamadas recursivas através do isolamento de contextos de ativa\c{c}\~{a}o.
-    \item \textbf{Mem\'{o}ria:} Gerenciamento dinâmico de arrays e structs durante a execu\c{c}\~{a}o.
+    \item \textbf{Recurs\~{a}o:} Suporte total a chamadas recursivas atrav\'{e}s do isolamento de contextos de ativa\c{c}\~{a}o.
+    \item \textbf{Mem\'{o}ria:} Gerenciamento din\^{a}mico de arrays e structs durante a execu\c{c}\~{a}o.
 \end{itemize}
 
-\section{Formaliza\c{c}\~{a}o Matem\'{a}tica}
+\subsection{Convers\~{a}o de Fechamentos (Closure Conversion)}
 
+Um dos grandes desafios na implementa\c{c}\~{a}o com suporte a fun\c{c}\~{o}es de ordem superior (High Order Functions) e fun\c{c}\~{o}es an\^{o}nimas (lambdas) \'{e} o tratamento de vari\'{a}veis livres. O interpretador precisa capturar e manter o contexto das vari\'{a}veis do escopo em que a fun\c{c}\~{a}o foi definida, evitando depender diretamente da pilha de execu\c{c}\~{a}o no momento em que ela \'{e} chamada.
+
+Para solucionar isso, foi implementada uma etapa de \textbf{Closure Conversion}. Esse processo reescreve a AST da seguinte maneira:
+\begin{enumerate}
+    \item \textbf{An\'{a}lise de Vari\'{a}veis Livres (Free Variables):} Uma travessia na AST identifica quais vari\'{a}veis s\~{a}o utilizadas dentro de uma fun\c{c}\~{a}o, mas s\~{a}o declaradas no escopo pai (ou seja, n\~{a}o s\~{a}o nem par\^{a}metros nem vari\'{a}veis locais \`{a} fun\c{c}\~{a}o).
+    \item \textbf{I\c{c}amento (Hoisting):} As fun\c{c}\~{o}es internas e as express\~{o}es lambda s\~{a}o substitu\'{i}das e convertidas para fun\c{c}\~{o}es globais. Um nome \'{u}nico gerado internamente \'{e} atribu\'{i}do a elas.
+    \item \textbf{Estrutura de Fechamento:} Todas as vari\'{a}veis livres capturadas passam a ser agrupadas em um ambiente est\'{a}tico (um registro de empacotamento) que \'{e} injetado como um par\^{a}metro ou acessado explicitamente pelo ambiente de execu\c{c}\~{a}o do interpretador no momento da constru\c{c}\~{a}o dessa closure.
+\end{enumerate}
+Essa transforma\c{c}\~{a}o permite simplificar o motor de execu\c{c}\~{a}o do interpretador e facilita futuramente a gera\c{c}\~{a}o m\'{a}quina de c\'{o}digo para linguagens-alvo de baixo n\'{i}vel.
+
+\subsection{Sem\^{a}ntica Operacional Big-Step}
+A sem\^{a}ntica din\^{a}mica descreve como o estado $\sigma$ (mapeamento de vari\'{a}veis para valores) evolui durante a execu\c{c}\~{a}o.
+
+\textbf{Avalia\c{c}\~{a}o de Express\~{o}es $(e, \sigma) \Downarrow v$:}
+\[
+\frac{\sigma(x) = v}{(x, \sigma) \Downarrow v} (Var) \quad \frac{(e_1, \sigma) \Downarrow v_{1} \quad (e_2, \sigma) \Downarrow v_{2} \quad v = v_{1} \oplus v_{2}}{(e_1 \oplus e_2, \sigma) \Downarrow v} (BinOp)
+\]
+
+\textbf{Execu\c{c}\~{a}o de Comandos $(s, \sigma) \Downarrow \sigma'$:}
+\[
+\frac{(e, \sigma) \Downarrow \texttt{true} \quad (s_1, \sigma) \Downarrow \sigma'}{(\texttt{if} \ e \ s_1 \ \texttt{else} \ s_2, \sigma) \Downarrow \sigma'} \quad \frac{(e, \sigma) \Downarrow \texttt{false} \quad (s_2, \sigma) \Downarrow \sigma'}{(\texttt{if} \ e \ s_1 \ \texttt{else} \ s_2, \sigma) \Downarrow \sigma'}
+\]
+
+\textbf{La\c{c}os e Expans\~{a}o:}
+\[
+\frac{(e, \sigma) \Downarrow \texttt{true} \quad (s, \sigma) \Downarrow \sigma_{1} \quad (\texttt{while} \ e \ s, \sigma_1) \Downarrow \sigma_{2}}{(\texttt{while} \ e \ s, \sigma) \Downarrow \sigma_2} \quad \frac{(e, \sigma) \Downarrow \texttt{false}}{(\texttt{while} \ e \ s, \sigma) \Downarrow \sigma}
+\]
+A sem\^{a}ntica do comando \texttt{for} \'{e} definida atrav\'{e}s de sua tradu\c{c}\~{a}o para um bloco contendo inicializa\c{c}\~{a}o e um la\c{c}o \texttt{while}:
+\[
+(for \ (i; c; p) \ \{b\}, \sigma) \Downarrow \sigma' \iff (\{ i; while \ (c) \ \{b; p\} \}, \sigma) \Downarrow \sigma'
+\]
+
+\textbf{Efeitos Colaterais (Prefix/Postfix):}
+\[
+\frac{\sigma(x) = n \quad \sigma' = \sigma[x \mapsto n+1]}{(++x, \sigma) \Downarrow (\sigma', n+1)} \quad \frac{\sigma(x) = n \quad \sigma' = \sigma[x \mapsto n+1]}{(x++, \sigma) \Downarrow (\sigma', n)}
+\]
+
+\subsection{Sistema de Tipos Formalizado em SL}
 Nesta se\c{c}\~{a}o, apresentamos o projeto formal do sistema de tipos e da sem\^{a}ntica operacional da linguagem SL, fundamentando o comportamento do analisador sem\^{a}ntico e do interpretador desenvolvidos na Etapa 2.
 
 \subsection{Sistema de Tipos (Regras de Infer\^{e}ncia)}
@@ -854,72 +553,94 @@ O sistema de tipos \'{e} formalizado atrav\'{e}s de julgamentos do tipo $\Gamma 
 \]
 \textit{Onde $\Gamma'$ \'{e} o ambiente estendido por eventuais declara\c{c}\~{o}es l\'{o}gicas em $s_{init}$.}
 
-\subsection{Sem\^{a}ntica Operacional Big-Step}
-A sem\^{a}ntica din\^{a}mica descreve como o estado $\sigma$ (mapeamento de vari\'{a}veis para valores) evolui durante a execu\c{c}\~{a}o.
 
-\textbf{Avalia\c{c}\~{a}o de Express\~{o}es $(e, \sigma) \Downarrow v$:}
-\[
-\frac{\sigma(x) = v}{(x, \sigma) \Downarrow v} (Var) \quad \frac{(e_1, \sigma) \Downarrow v_{1} \quad (e_2, \sigma) \Downarrow v_{2} \quad v = v_{1} \oplus v_{2}}{(e_1 \oplus e_2, \sigma) \Downarrow v} (BinOp)
-\]
 
-\textbf{Execu\c{c}\~{a}o de Comandos $(s, \sigma) \Downarrow \sigma'$:}
-\[
-\frac{(e, \sigma) \Downarrow \texttt{true} \quad (s_1, \sigma) \Downarrow \sigma'}{(\texttt{if} \ e \ s_1 \ \texttt{else} \ s_2, \sigma) \Downarrow \sigma'} \quad \frac{(e, \sigma) \Downarrow \texttt{false} \quad (s_2, \sigma) \Downarrow \sigma'}{(\texttt{if} \ e \ s_1 \ \texttt{else} \ s_2, \sigma) \Downarrow \sigma'}
-\]
 
-\textbf{La\c{c}os e Expans\~{a}o:}
-\[
-\frac{(e, \sigma) \Downarrow \texttt{true} \quad (s, \sigma) \Downarrow \sigma_{1} \quad (\texttt{while} \ e \ s, \sigma_1) \Downarrow \sigma_{2}}{(\texttt{while} \ e \ s, \sigma) \Downarrow \sigma_2} \quad \frac{(e, \sigma) \Downarrow \texttt{false}}{(\texttt{while} \ e \ s, \sigma) \Downarrow \sigma}
-\]
-A sem\^{a}ntica do comando \texttt{for} \'{e} definida atrav\'{e}s de sua tradu\c{c}\~{a}o para um bloco contendo inicializa\c{c}\~{a}o e um la\c{c}o \texttt{while}:
-\[
-(for \ (i; c; p) \ \{b\}, \sigma) \Downarrow \sigma' \iff (\{ i; while \ (c) \ \{b; p\} \}, \sigma) \Downarrow \sigma'
-\]
+\section{Testes realizados}
 
-\textbf{Efeitos Colaterais (Prefix/Postfix):}
-\[
-\frac{\sigma(x) = n \quad \sigma' = \sigma[x \mapsto n+1]}{(++x, \sigma) \Downarrow (\sigma', n+1)} \quad \frac{\sigma(x) = n \quad \sigma' = \sigma[x \mapsto n+1]}{(x++, \sigma) \Downarrow (\sigma', n)}
-\]
+Foram utilizados arquivos de exemplo (por exemplo \texttt{test/ex2.sl}, \texttt{test/ex3.sl}, \texttt{test/ex6.sl}) para validar o lexer e o parser. Durante o desenvolvimento foram corrigidos problemas como:
+\begin{itemize}
+    \item tokens com posi\c{c}\~{a}o (SourcePos) que exigiram padr\~{o}es de correspond\^{e}ncia com campos extras;
+    \item parsing de acesso a campos (ponto) e indexa\c{c}\~{a}o dentro de express\~{o}es de tamanho (por exemplo, \texttt{new b[v.size]});
+    \item suporte a declara\c{c}\~{o}es de \texttt{struct} de topo e literais de struct no formato \texttt{Type\{v1, v2, ...\}} (por exemplo, \texttt{Person{''Alice'', 25, 1.65}});
+    \item aceita\c{c}\~{a}o de tipos de par\^{a}metro opcionais e inicializadores opcionais em \texttt{let};
+    \item suporte a literais de array e \`{a} express\~{a}o \texttt{new T[e]}.
+    \item Foram criados 6 arquivos de teste cobrindo diversas constru\c{c}\~{o}es da linguagem SL. Todos est\~{a}o localizados na pasta test
+\end{itemize}
+
+\subsection{Lista de testes (pasta \texttt{test/})}
+
+O reposit\'{o}rio inclui v\'{a}rios arquivos de teste localizados em \texttt{test/}. Abaixo listamos os ficheiros presentes e descrevemos, de forma concisa e ligada ao c\'{o}digo do verificador, por que cada teste \'{e} considerado correto (isto \'{e}, por que o \emph{typechecker} os aceita).
+
+Arquivos de teste inclu\'{i}dos:
+\begin{itemize}
+    \item \texttt{test/ex1.sl}
+    \item \texttt{test/ex2.sl}
+    \item \texttt{test/ex3.sl}
+    \item \texttt{test/ex4.sl}
+    \item \texttt{test/ex5.sl}  % fun\c{c}\~{a}o identidade (mostrada abaixo)
+    \item \texttt{test/ex6.sl}
+    \item \texttt{test/ex7.sl}
+    \item \texttt{test/ex8.sl}
+    \item \texttt{test/fail\_scope.sl} % teste com falha de escopo
+\end{itemize}
+
+Como o verificador opera (resumo do mecanismo usado para aceitar os testes):
+\begin{enumerate}
+    \item Antes de checar corpos de fun\c{c}\~{o}es, o programa chama \texttt{collectSignatures} para preencher \texttt{funcs} e \texttt{structs} com assinaturas e defini\c{c}\~{o}es top-level. Isso permite que chamadas recursivas e refer\^{e}ncias a structs sejam validadas apenas com sua assinatura (veja a fun\c{c}\~{a}o \texttt{collectSignatures} em \texttt{TypeChecker.hs}).
+    \item Para cada defini\c{c}\~{a}o (fun\c{c}\~{a}o/struct) o verificador chama \texttt{checkDef} que: seta o \texttt{retType}, entra em escopo com \texttt{enterScope}, registra par\^{a}metros com \texttt{defineVar} e verifica o corpo com \texttt{checkStmt} (que por sua vez usa \texttt{checkExpr}).
+    \item A resolu\c{c}\~{a}o de identificadores usa \texttt{lookupVar} (procura em \texttt{vars}) e tamb\'{e}m consulta \texttt{funcs} caso o nome corresponda a uma fun\c{c}\~{a}o. \texttt{defineVar} garante dete\c{c}\~{a}o de redeclara\c{c}\~{a}o no mesmo escopo ao inserir em \texttt{currentVars} e \texttt{vars}.
+    \item Verifica\c{c}\~{o}es de compatibilidade de tipos s\~{a}o centralizadas em \texttt{expectType} (compara dois \texttt{Type} e emite erro se divergirem). Para fun\c{c}\~{o}es gen\'{e}ricas, a checagem utiliza \texttt{satisfy} para construir uma substitui\c{c}\~{a}o de vari\'{a}veis de tipo e \texttt{applySubst} para aplicar essa substitui\c{c}\~{a}o ao tipo de retorno esperado.
+    \item Regras espec\'{i}ficas (indexa\c{c}\~{a}o, acesso a campos, operadores aritm\'{e}ticos/ l\'{o}gicos, etc.) s\~{a}o tratadas em \texttt{checkExpr} e reportam mensagens de erro claras quando a forma/ tipos n\~{a}o batem.
+\end{enumerate}
+
+Exemplo concreto: \texttt{test/ex5.sl}
+\begin{lstlisting}
+// Exemplo 5: fun\c{c}\~{a}o identidade
+func id(x : int) : int {
+    return x;
+}
+
+func main() : void {
+    let value : int = 5;
+    let identity = id(value);
+    print(identity);
+}
+\end{lstlisting}
+
+Por que \texttt{ex5.sl} passou no \texttt{typechecker}:
+\begin{itemize}
+    \item \texttt{collectSignatures} registra a assinatura de \texttt{id} como \texttt{([], [int], int)} em \texttt{funcs} (sem gen\'{e}ricos neste caso).
+    \item Ao checar a chamada \texttt{id(value)} o verificador avalia o argumento \texttt{value} e obt\'{e}m \texttt{int} (via \texttt{checkExpr} e \texttt{lookupVar}).
+    \item \texttt{checkExpr} para chamada encontra a assinatura em \texttt{funcs} e compara os tipos esperados dos argumentos com os tipos efetivamente passados; aqui \texttt{expectType} confirma que ambos s\~{a}o \texttt{int}.
+    \item O tipo de retorno de \texttt{id} (\texttt{int}) \'{e} ent\~{a}o usado como tipo de \texttt{identity} (por \texttt{applySubst} no caso gen\'{e}rico; aqui n\~{a}o h\'{a} substitui\c{c}\~{o}es) e \texttt{print} aceita valores sem tipo de retorno (\texttt{print} \'{e} tratada especialmente e retorna \texttt{void}).
+\end{itemize}
+
+Teste de falha de escopo: \texttt{test/failscope.sl}
+\begin{itemize}
+    \item Este arquivo (intencionalmente) tenta acessar/usar uma vari\'{a}vel fora do seu escopo. O verificador detecta isso em \texttt{lookupVar} (que n\~{a}o encontra a entrada em \texttt{vars} e n\~{a}o h\'{a} assinatura de fun\c{c}\~{a}o correspondente em \texttt{funcs}) e lan\c{c}a um erro ''Vari\'{a}vel n\~{a}o est\'{a} no escopo''. Essa falha valida a corretude da implementa\c{c}\~{a}o de \texttt{enterScope}/\texttt{exitScope} e do mecanismo de restaura\c{c}\~{a}o do \texttt{context}.
+\end{itemize}
+
+Resumo: os testes foram desenhados para cobrir os principais aspectos do front-end: tokeniza\c{c}\~{a}o/lexer, parse, estrutura de AST, regras de tipos (incluindo arrays, structs, chamadas, e gen\'{e}ricos simples) e verifica\c{c}\~{a}o de escopo. O verificador implementado usa \texttt{ExpectT String (State Env)} para combinar mensagens de erro leg\'{i}veis com um ambiente mut\'{a}vel acess\'{i}vel por todas as rotinas de checagem; fun\c{c}\~{o}es centrais como \texttt{expectType}, \texttt{satisfy}, \texttt{applySubst}, \texttt{lookupVar} e \texttt{defineVar} s\~{a}o respons\'{a}veis por garantir que os programas de teste estejam semanticamente corretos.
 
 \section{Limita\c{c}\~{o}es e trabalho futuro}
 
 Limita\c{c}\~{o}es atuais:
 \begin{itemize}
-    \item gera\c{c}\~{a}o de c\'{o}digo em desenvolvimento (Etapa 3);
-    \item representa\c{c}\~{a}o de tipos na AST \'{e} simplificada (strings) e deve ser substitu\'{i}da por um AST de tipos dedicado;
-    \item mensagens de erro do parser atualmente s\~{a}o retornadas como \texttt{String} (via \texttt{show} do \texttt{ParseErrorBundle}) --- podem ser melhor formatadas para uso interativo;
+    \item gera\c{c}\~{a}o de c\'{o}digo Web-Assembly e infer\^{e}ncia global de tipos ainda não iniciados;
+    \item operaç\~{o}es entre tipos númericos (int e float) não é suportada nativamente sem conversão explícita;
     \item o parser \'{e} manual e poderia ser refatorado para reduzir duplica\c{c}\~{a}o (por exemplo, usar combinadores mais declarativos ou um parser de preced\^{e}ncia completo).
 \end{itemize}
 
-\section{Gera\c{c}\~{a}o de C\'{o}digo (Etapa 3)}
-
-A terceira etapa implementou a gera\c{c}\~{a}o de c\'{o}digo para WebAssembly (WAT).
-Novos m\'{o}dulos:
-\begin{itemize}
-    \item \texttt{WAT.hs}: Define a AST do WebAssembly (WModule, WFunc, WInstr) e o Pretty Printer respons\'{a}vel por gerar o c\'{o}digo S-Expression final.
-    \item \texttt{CodeGenerator.hs}: Percorre a AST da linguagem SL e traduz para instru\c{c}\~{o}es WAT.
-\end{itemize}
-
-Funcionalidades implementadas:
-\begin{itemize}
-    \item \textbf{Mapeamento de Tipos:} \texttt{int/bool} $\to$ \texttt{i32}, \texttt{float} $\to$ \texttt{f64}.
-    \item \textbf{Express\~{o}es B\'{a}sicas:} Aritm\'{e}tica, compara\c{c}\~{o}es e chamadas de fun\c{c}\~{a}o.
-    \item \textbf{Controle de Fluxo:} Tradução de \texttt{if}, \texttt{while}, \texttt{for} para constru\c{c}\~{o}es estruturadas do WASM (\texttt{block}, \texttt{loop}, \texttt{br\_if}).
-    \item \textbf{Fun\c{c}\~{o}es:} Suporte a fun\c{c}\~{o}es, vari\'{a}veis locais e recurs\~{a}o.
-    \item \textbf{Aloca\c{c}\~{a}o de Mem\'{o}ria (Arrays):} Implementa\c{c}\~{a}o de um alocador linear simples (bump allocator) usando var\'{i}avel global \texttt{\$free\_ptr}. Suporte a \texttt{new T[n]}, literais de array e acesso por \'{i}ndice.
-\end{itemize}
-
-O compilador gera c\'{o}digo WAT v\'{a}lido que pode ser convertido para bin\'{a}rio \texttt{.wasm} utilizando ferramentas como \texttt{wat2wasm}.
-
 \section{Conclus\~{a}o}
 
-O trabalho entregou um front-end inicial funcional para a linguagem SL: um lexer robusto baseado em Megaparsec e um parser token-driven que j\'{a} entende um conjunto razo\'{a}vel de constru\c{c}\~{o}es de linguagem. O artefato fornece uma base s\'{o}lida para as pr\'{o}ximas fases, como checagem de tipos e gera\c{c}\~{a}o de c\'{o}digo.
-Apesar das limita\c{c}\~{o}es, o projeto demonstra conceitos fundamentais de an\'{a}lise l\'{e}xica e sint\'{a}tica em compiladores, servindo como um ponto de partida para futuras extens\~{o}es.
+A segunda etapa consolidou o motor sem\^{a}ntico e interpretador do compilador SL. O \texttt{TypeChecker} demonstrou uma capacidade formid\'{a}vel de detec\c{c}\~{a}o de problemas ao lidar com estado de escopo por m\'{o}nadas. Al\'{e}m disso, o Interpretador permitiu visualizar o c\'{o}digo em funcionamento pr\'{a}tico, confirmando a sem\^{a}ntica operancional \textit{Big-Step} esperada.
+
+Como pr\'{o}ximo passo em direção à Etapa 3 final, planejamos estender a valida\c{c}\~{a}o para uma Infer\^{e}ncia Global de Tipos plena e enfim realizar a gera\c{c}\~{a}o de c\'{o}digo bin\'{a}rio de baixo n\'{i}vel atrav\'{e}s do WebAssembly.
 
 \section{Refer\^{e}ncias}
 
 \begin{itemize}
     \item Megaparsec: Monadic parser combinators. Dispon\'{i}vel em: \url{https://hackage.haskell.org/package/megaparsec}. Acesso em: 14 dez. 2025.
 \end{itemize}
-
 \end{document}

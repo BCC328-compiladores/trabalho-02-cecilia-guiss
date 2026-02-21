@@ -217,7 +217,7 @@ updateAssign (EBin "." eStruct (EVar fName)) val = do
 \end{frame}
 
 \begin{frame}[fragile]{Casos de Teste de Erro}
-    A robustez da análise semântica em cenários de falha.
+    Análise Semântica: Erros são capturados na modelagem de escopo de Types.
     \begin{lstlisting}[language=C, caption={fail\_scope.sl}]
 func main() {
     print(undeclared_var); // Semantica detecta erro antes da execucao
@@ -228,11 +228,10 @@ func main() {
 
 \section{Conclusão}
 \begin{frame}{Conclusão das Etapas 1 e 2}
-    \begin{itemize}
-        \item Arquitetura sólida e extensível em Haskell com o Megaparsec.
-        \item Sistema de tipos Genéricos e funções de ordem superior.
-        \item Interpretador funcional pronto para servir de referência.
-    \end{itemize}
+\begin{itemize}
+\item Arquitetura sólida e extensível em Haskell.
+\item Validação robusta de Contexto de Variáveis no Interpretador Funcional Big-Step.
+\end{itemize}
 \end{frame}
 
 \begin{frame}{Próximos Passos: Etapa 3}
